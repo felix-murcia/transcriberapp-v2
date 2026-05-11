@@ -1,0 +1,13 @@
+venv_transcriber/
+__pycache__/
+instance/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+output/

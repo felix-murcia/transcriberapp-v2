@@ -1,0 +1,88 @@
+"""Data‑access objects (DAOs) for the persistence layer.
+
+Each repository receives a SQLAlchemy ``Session`` (or ``AsyncSession`` in a
+future async version) and provides simple CRUD methods that are used by the
+application layer. Keeping the repositories thin makes them easy to mock in
+unit tests.
+"""
+
+from __future__ import annotations
+
+from typing import List, Optional
+from datetime import datetime
+
+from sqlalchemy.orm import Session
+from sqlalchemy import select, delete, update
+
+from .models import User, Transcription, Conversation
+
+
+class UserRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_by_email(self, email: str) -> Optional[User]:
+        return self.session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+
+    def create(self, email: str, hashed_password: str) -> User:
+        user = User(email=email, hashed_password=hashed_password)
+        self.session.add(user)
+        self.session.flush()  # assign id
+        return user
+
+    def set_active(self, user_id: int, active: bool) -> None:
+        self.session.execute(update(User).where(User.id == user_id).values(is_active=active))
+
+
+class TranscriptionRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def create(self, *, user_id: int, job_id: str, audio_filename: str, audio_path: Optional[str], mode: str, email: Optional[str] = None) -> Transcription:
+        tr = Transcription(
+            user_id=user_id,
+            job_id=job_id,
+            audio_filename=audio_filename,
+            audio_path=audio_path,
+            mode=mode,
+            email=email,
+        )
+        self.session.add(tr)
+        self.session.flush()
+        return tr
+
+    def get_by_job_id(self, job_id: str) -> Optional[Transcription]:
+        return self.session.execute(select(Transcription).where(Transcription.job_id == job_id)).scalar_one_or_none()
+
+    def list_by_user(self, user_id: int, offset: int = 0, limit: int = 20) -> List[Transcription]:
+        stmt = (
+            select(Transcription)
+            .where(Transcription.user_id == user_id)
+            .order_by(Transcription.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return self.session.execute(stmt).scalars().all()
+
+    def update_status(self, job_id: str, status: str, **extra) -> None:
+        data = {"status": status, "completed_at": datetime.utcnow()}
+        data.update(extra)
+        self.session.execute(update(Transcription).where(Transcription.job_id == job_id).values(**data))
+
+    def delete(self, job_id: str) -> None:
+        self.session.execute(delete(Transcription).where(Transcription.job_id == job_id))
+
+
+class ConversationRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def add_message(self, transcription_id: int, role: str, content: str) -> Conversation:
+        conv = Conversation(transcription_id=transcription_id, role=role, content=content)
+        self.session.add(conv)
+        self.session.flush()
+        return conv
+
+    def list_by_transcription(self, transcription_id: int) -> List[Conversation]:
+        stmt = select(Conversation).where(Conversation.transcription_id == transcription_id).order_by(Conversation.timestamp)
+        return self.session.execute(stmt).scalars().all()

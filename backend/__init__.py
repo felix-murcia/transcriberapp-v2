@@ -1,0 +1,1 @@
+"""TranscriberApp - hexagonal architecture implementation."""
