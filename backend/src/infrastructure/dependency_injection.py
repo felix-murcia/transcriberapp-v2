@@ -12,8 +12,8 @@ from backend.src.infrastructure.queue import FastAPIBackgroundTasksAdapter
 
 def create_transcription_service():
     """Create a fully wired transcription service with all dependencies."""
-    from backend.src.application.services import TranscriptionService
-    from backend.src.infrastructure.job_status import InMemoryJobStatusRepository
+    from backend.src.domain.services import TranscriptionService
+    from backend.src.infrastructure.job_status import get_job_status_repository
     
     # Create all port implementations
     file_reader = LocalAudioFileReader()
@@ -21,7 +21,7 @@ def create_transcription_service():
     transcriber = GroqAudioTranscriber()
     summarizer = GeminiAISummarizer()
     formatter = LocalOutputFormatter()
-    job_repo = InMemoryJobStatusRepository()  # Use in-memory for now
+    job_repo = get_job_status_repository()  # Uses appropriate implementation based on environment
     file_storage = LocalFileStorage()
     
     return TranscriptionService(

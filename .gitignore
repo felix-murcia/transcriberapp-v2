@@ -23,7 +23,26 @@ coverage.xml
 .pytest_cache/
 .pyre/
 .pytype/
-.mypy_cache/
 .dmypy.json
 dmypy.json
 .copilot-tracking/
+docs/qa/
+node_modules/
+dist/
+build/
+*.egg-info/
+*.egg
+*.log
+# Docker files
+Dockerfile
+Dockerfile.dev
+Dockerfile.frontend
+docker-compose*.yml
+.env
+.env.dev
+.env.prod
+nginx.conf
+.k8s/
+audios/
+outputs/
+transcripts/

@@ -21,7 +21,7 @@ Migrar la aplicación legacy `transcriberapp` a la arquitectura propuesta en `TO
 ## Research Summary
 
 ### Project Files
-- `transcriber_app/` – paquete principal con módulos de audio, IA y API.
+- `transcriber_app/` – paquete principal con módulos de audio, IA y API en legacy.
 - `requirements.txt`, `docker-compose.yml`, `CLAUDE.md`.
 
 ### External References
