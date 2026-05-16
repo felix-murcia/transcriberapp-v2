@@ -2,6 +2,7 @@
 Google Gemini AI summarizer implementation.
 """
 
+import os
 import json
 import requests
 from backend.src.domain.ports import AISummarizerPort
@@ -11,8 +12,8 @@ class GeminiAISummarizer(AISummarizerPort):
     """Google Gemini AI summarizer."""
 
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or "YOUR_GEMINI_API_KEY"  # Replace with actual API key
-        self.base_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={self.api_key}"
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY", "")
+        self.model = os.getenv("USE_MODEL", "gemini-2.5-flash-lite")
 
     def summarize(self, text: str, mode: str) -> str:
         """Summarize text using Google Gemini AI."""
@@ -47,9 +48,10 @@ class GeminiAISummarizer(AISummarizerPort):
                 }
             }
             
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
             # Make API request
             response = requests.post(
-                self.base_url,
+                url,
                 headers={"Content-Type": "application/json"},
                 data=json.dumps(request_data)
             )

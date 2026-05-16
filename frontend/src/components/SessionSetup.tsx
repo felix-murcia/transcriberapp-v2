@@ -2,16 +2,14 @@ import { useState } from 'react'
 import { useAppContext } from '../context/AppContext'
 
 export default function SessionSetup() {
-  const { sessionName, setSessionName } = useAppContext()
-  const [isValid, setIsValid] = useState(false)
+  const { setSessionName } = useAppContext()
+  const [inputValue, setInputValue] = useState('')
+  const isValid = inputValue.trim().length >= 5
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
-    const trimmed = value.trim()
-    const valid = trimmed.length >= 5
-
-    setSessionName(valid ? trimmed : '')
-    setIsValid(valid)
+    setInputValue(value)
+    setSessionName(value.trim().length >= 5 ? value.trim() : '')
   }
 
   return (
@@ -24,7 +22,7 @@ export default function SessionSetup() {
           id="nombre"
           className="form-control"
           placeholder="ej: reunion_enero"
-          value={sessionName}
+          value={inputValue}
           onChange={handleNameChange}
           aria-required="true"
         />

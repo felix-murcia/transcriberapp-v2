@@ -1,19 +1,49 @@
 """Web layer - FastAPI application with REST API endpoints."""
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import tempfile
 import os
 import shutil
+import json
+import requests
 from uuid import uuid4
+from datetime import datetime
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from backend.src.application.use_cases import ProcessAudioUseCase, ProcessTextUseCase
 from backend.src.infrastructure.dependency_injection import (
     create_transcription_service,
     get_background_tasks_adapter,
 )
+from backend.src.infrastructure.persistence.models import Base, User, Transcription, Conversation
+from backend.src.infrastructure.persistence.repositories import (
+    UserRepository, TranscriptionRepository, ConversationRepository
+)
+
+# --- Database setup ---
+DATABASE_URL = os.getenv("POSTGRES_URL", "sqlite:///./local.db")
+_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=_connect_args)
+SessionLocal = sessionmaker(bind=engine)
+Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    return SessionLocal()
+
+
+def get_or_create_anon_user(db) -> int:
+    """Return user_id for the anonymous local user, creating it if needed."""
+    repo = UserRepository(db)
+    user = repo.get_by_email("anonymous@local")
+    if not user:
+        user = repo.create(email="anonymous@local", hashed_password="")
+        db.commit()
+    return user.id
 
 # Create FastAPI app
 app = FastAPI(
@@ -348,72 +378,285 @@ async def upload_cancel(uploadId: str = Form(...)):
 
 @app.get("/api/status/{job_id}")
 def get_status(job_id: str):
-    """Get the status of a processing job."""
-    from backend.src.application.use_cases import JOB_STATUS
-    job_data = JOB_STATUS.get(job_id, "unknown")
-    if isinstance(job_data, dict):
-        return job_data
-    return {"job_id": job_id, "status": job_data}
+    """Get the status of a processing job from the database."""
+    db = get_db()
+    try:
+        repo = TranscriptionRepository(db)
+        tr = repo.get_by_job_id(job_id)
+        if not tr:
+            return {"job_id": job_id, "status": "processing"}
+        return {
+            "job_id": tr.job_id,
+            "status": tr.status,
+            "transcription": tr.transcription_text,
+            "summary": tr.summary_output,
+            "mode": tr.mode,
+            "error": tr.error_message,
+        }
+    finally:
+        db.close()
 
 
 def process_audio_job(job_id: str, nombre: str, modo: str, email: str = None):
-    """
-    Process audio job in background.
-    
-    Args:
-        job_id: Job identifier
-        nombre: Audio filename
-        modo: Processing mode
-        email: Optional email for notifications
-    """
+    """Process audio job in background and persist result to DB."""
+    db = get_db()
     try:
-        # Find the audio file
-        audios_dir = Path("audios")
-        audio_path = audios_dir / f"{nombre}.webm"  # Default extension
-        
-        # Try different extensions
-        if not audio_path.exists():
-            for ext in ['.mp3', '.webm', '.wav', '.m4a', '.ogg']:
-                test_path = audios_dir / f"{nombre}{ext}"
-                if test_path.exists():
-                    audio_path = test_path
-                    break
-        
-        if not audio_path.exists():
-            raise Exception(f"Audio file not found: {nombre}")
-        
-        # Create use case and execute
-        transcription_service = create_transcription_service()
-        use_case = ProcessAudioUseCase(transcription_service)
-        
-        result = use_case.execute(
-            audio_path=str(audio_path),
+        user_id = get_or_create_anon_user(db)
+        tr_repo = TranscriptionRepository(db)
+
+        # Register job as pending
+        tr_repo.create(
+            user_id=user_id,
+            job_id=job_id,
+            audio_filename=nombre,
+            audio_path=None,
             mode=modo,
             email=email,
-            job_id=job_id,
         )
-        
-        # Store result
-        from backend.src.application.use_cases import JOB_STATUS
-        JOB_STATUS[job_id] = {
-            "status": "completed",
-            "job_id": job_id,
-            "transcription": result.get("transcription"),
-            "summary": result.get("summary"),
-            "mode": result.get("mode"),
-            "error": result.get("error"),
-            "error_type": result.get("error_type"),
-        }
-        
+        db.commit()
+
+        # Find the audio file
+        audios_dir = Path("audios")
+        audio_path = None
+        for ext in ['.webm', '.mp3', '.wav', '.m4a', '.ogg']:
+            p = audios_dir / f"{nombre}{ext}"
+            if p.exists():
+                audio_path = p
+                break
+
+        if not audio_path:
+            raise Exception(f"Audio file not found: {nombre}")
+
+        transcription_service = create_transcription_service()
+        use_case = ProcessAudioUseCase(transcription_service)
+        result = use_case.execute(audio_path=str(audio_path), mode=modo, email=email, job_id=job_id)
+
+        print(f"[JOB {job_id}] raw result: {result}")
+
+        if result.get("status") == "error" or result.get("error"):
+            tr_repo.update_status(job_id, "failed", error_message=result.get("error", "Unknown error"))
+        else:
+            tr_repo.update_status(
+                job_id,
+                "completed",
+                transcription_text=result.get("transcription"),
+                summary_output=result.get("summary"),
+            )
+        db.commit()
+
     except Exception as e:
-        # Store error
-        from backend.src.application.use_cases import JOB_STATUS
-        JOB_STATUS[job_id] = {
-            "status": "failed",
-            "job_id": job_id,
-            "error": str(e),
-            "error_type": "processing_error",
+        print(f"[JOB {job_id}] EXCEPTION: {e}")
+        try:
+            tr_repo.update_status(job_id, "failed", error_message=str(e))
+            db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Transcription history endpoints (replaces IndexedDB)
+# =============================================================================
+
+@app.post("/api/transcriptions")
+def save_transcription(payload: dict):
+    """Persist a completed transcription to the database."""
+    db = get_db()
+    try:
+        user_id = get_or_create_anon_user(db)
+        repo = TranscriptionRepository(db)
+
+        job_id = payload.get("job_id", str(uuid4()))
+        existing = repo.get_by_job_id(job_id)
+        if existing:
+            repo.update_status(
+                job_id,
+                "completed",
+                transcription_text=payload.get("transcription_text"),
+                summary_output=payload.get("summary_output"),
+            )
+        else:
+            tr = repo.create(
+                user_id=user_id,
+                job_id=job_id,
+                audio_filename=payload.get("audio_filename", "unknown"),
+                audio_path=payload.get("audio_path"),
+                mode=payload.get("mode", "default"),
+                email=payload.get("email"),
+            )
+            repo.update_status(
+                job_id,
+                "completed",
+                transcription_text=payload.get("transcription_text"),
+                summary_output=payload.get("summary_output"),
+            )
+
+        db.commit()
+        return {"ok": True, "job_id": job_id}
+    finally:
+        db.close()
+
+
+@app.get("/api/transcriptions")
+def list_transcriptions():
+    """List all transcriptions for the anonymous user."""
+    db = get_db()
+    try:
+        user_id = get_or_create_anon_user(db)
+        repo = TranscriptionRepository(db)
+        items = repo.list_by_user(user_id, limit=50)
+        return [
+            {
+                "job_id": t.job_id,
+                "audio_filename": t.audio_filename,
+                "mode": t.mode,
+                "status": t.status,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in items
+        ]
+    finally:
+        db.close()
+
+
+@app.get("/api/transcriptions/{job_id}")
+def get_transcription(job_id: str):
+    """Get a single transcription with full content."""
+    db = get_db()
+    try:
+        repo = TranscriptionRepository(db)
+        tr = repo.get_by_job_id(job_id)
+        if not tr:
+            raise HTTPException(status_code=404, detail="Not found")
+        return {
+            "job_id": tr.job_id,
+            "audio_filename": tr.audio_filename,
+            "mode": tr.mode,
+            "status": tr.status,
+            "transcription_text": tr.transcription_text,
+            "summary_output": tr.summary_output,
+            "created_at": tr.created_at.isoformat() if tr.created_at else None,
         }
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Conversation endpoints
+# =============================================================================
+
+@app.post("/api/conversations")
+def add_conversation_message(payload: dict):
+    """Add a message to a transcription's conversation."""
+    db = get_db()
+    try:
+        tr_repo = TranscriptionRepository(db)
+        tr = tr_repo.get_by_job_id(payload["job_id"])
+        if not tr:
+            raise HTTPException(status_code=404, detail="Transcription not found")
+
+        conv_repo = ConversationRepository(db)
+        msg = conv_repo.add_message(
+            transcription_id=tr.id,
+            role=payload["role"],
+            content=payload["content"],
+        )
+        db.commit()
+        return {"ok": True, "id": msg.id}
+    finally:
+        db.close()
+
+
+@app.get("/api/conversations/{job_id}")
+def get_conversation(job_id: str):
+    """Get all messages for a transcription's conversation."""
+    db = get_db()
+    try:
+        tr_repo = TranscriptionRepository(db)
+        tr = tr_repo.get_by_job_id(job_id)
+        if not tr:
+            raise HTTPException(status_code=404, detail="Transcription not found")
+
+        conv_repo = ConversationRepository(db)
+        msgs = conv_repo.list_by_transcription(tr.id)
+        return [{"role": m.role, "content": m.content} for m in msgs]
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Chat streaming endpoint
+# =============================================================================
+
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL = os.getenv("USE_MODEL", "gemini-2.5-flash-lite")
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(payload: dict):
+    """Stream a chat response from Gemini given transcription context."""
+    message = payload.get("message", "")
+    transcription = payload.get("transcription", "")
+    summary = payload.get("summary", "")
+    history = payload.get("history", [])
+
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    system_context = "Eres un asistente que ayuda a analizar transcripciones de audio.\n\n"
+    if transcription:
+        system_context += f"TRANSCRIPCIÓN:\n{transcription}\n\n"
+    if summary:
+        system_context += f"RESUMEN:\n{summary}\n\n"
+    system_context += "Responde las preguntas del usuario basándote en este contenido."
+
+    contents = []
+    for h in history[:-1]:  # exclude the last user message, we add it below
+        contents.append({"role": h["role"] if h["role"] != "assistant" else "model", "parts": [{"text": h["content"]}]})
+    # system context as first user turn if no history
+    if not contents:
+        contents.append({"role": "user", "parts": [{"text": system_context}]})
+        contents.append({"role": "model", "parts": [{"text": "Entendido, estoy listo para responder preguntas sobre la transcripción."}]})
+    contents.append({"role": "user", "parts": [{"text": message}]})
+
+    def generate():
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{GEMINI_MODEL}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}"
+        )
+        try:
+            with requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json={"contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}},
+                stream=True,
+                timeout=60,
+            ) as resp:
+                if resp.status_code != 200:
+                    yield f"[Error Gemini: {resp.status_code}]"
+                    return
+                for line in resp.iter_lines():
+                    if line and line.startswith(b"data: "):
+                        data_str = line[6:].decode("utf-8")
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            text = (
+                                data.get("candidates", [{}])[0]
+                                .get("content", {})
+                                .get("parts", [{}])[0]
+                                .get("text", "")
+                            )
+                            if text:
+                                yield text
+                        except Exception:
+                            pass
+        except Exception as e:
+            yield f"\n[Error: {str(e)}]"
+
+    return StreamingResponse(generate(), media_type="text/plain")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
-"""Infrastructure layer - AI implementations.
-Concrete implementations of AI-related ports.
-"""
+"""Infrastructure layer - AI implementations."""
+from backend.src.infrastructure.ai.gemini_ai_summarizer import GeminiAISummarizer
+
+__all__ = ["GeminiAISummarizer"]
+
+# legacy stubs kept below for backward compat but not exported
 from backend.src.domain.ports import AISummarizerPort
 from backend.src.domain.exceptions import TranscriptionError
 import os

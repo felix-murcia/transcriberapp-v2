@@ -1,3 +1,5 @@
+import { marked } from 'marked'
+
 interface ResultsPanelProps {
   results?: {
     transcription: string
@@ -10,6 +12,8 @@ interface ResultsPanelProps {
 export default function ResultsPanel({ results }: ResultsPanelProps) {
   if (!results) return null
 
+  const summaryHtml = results.summary ? marked.parse(results.summary) as string : ''
+
   return (
     <section className="results-section">
       {results.transcription && (
@@ -19,10 +23,10 @@ export default function ResultsPanel({ results }: ResultsPanelProps) {
         </div>
       )}
 
-      {results.summary && (
+      {summaryHtml && (
         <details className="result-box" open>
           <summary>Modo: {results.mode}</summary>
-          <div className="markdown-body">{results.summary}</div>
+          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
         </details>
       )}
 

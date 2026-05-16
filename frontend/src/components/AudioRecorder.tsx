@@ -1,133 +1,148 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState } from 'react'
 
-const CHUNK_SIZE = 1024 * 1024 * 2 // 2MB por chunk
+const CHUNK_SIZE = 1024 * 1024 * 2 // 2MB
 
 interface AudioRecorderProps {
-  isRecording: boolean
-  setIsRecording: (val: boolean) => void
   disabled?: boolean
   onAudioAvailable?: (available: boolean, blob?: Blob) => void
+  onJobStarted?: (jobId: string) => void
 }
 
-export default function AudioRecorder({ isRecording, setIsRecording, disabled = false, onAudioAvailable }: AudioRecorderProps) {
+export default function AudioRecorder({ disabled = false, onAudioAvailable, onJobStarted }: AudioRecorderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<BlobPart[]>([])
+
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [audioUrl, setAudioUrl] = useState<string>('')
   const [statusText, setStatusText] = useState('')
   const [uploadProgress, setUploadProgress] = useState<number>(-1)
-  const [uploadId, setUploadId] = useState<string>('')
+  const [isRecording, setIsRecording] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
+  const uploadIdRef = useRef<string>('')
 
-  const uploadChunks = async (file: File, modo: string, email: string, nombre: string) => {
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-    const extension = file.name.split('.').pop() || 'webm'
-    const sessionId = crypto.randomUUID()
+  // ── Recording ────────────────────────────────────────────────────────────
 
-    setUploadId(sessionId)
-    setIsUploading(true)
-    setUploadProgress(0)
-
+  const startRecording = async () => {
     try {
-      // Upload chunks sequentially
-      for (let i = 0; i < totalChunks; i++) {
-        if (!sessionId) break
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
-        const start = i * CHUNK_SIZE
-        const end = Math.min(start + CHUNK_SIZE, file.size)
-        const chunk = file.slice(start, end)
+      const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+      const mimeType = mimeTypes.find(t => MediaRecorder.isTypeSupported(t)) || 'audio/webm'
 
-        const formData = new FormData()
-        formData.append('chunk', new File([chunk], `chunk_${i}`, { type: file.type }))
-        formData.append('chunkIndex', String(i))
-        formData.append('totalChunks', String(totalChunks))
-        formData.append('uploadId', sessionId)
-        formData.append('nombre', nombre)
-        formData.append('modo', modo)
-        if (email) formData.append('email', email)
-        formData.append('extension', extension)
+      const recorder = new MediaRecorder(stream, { mimeType })
+      mediaRecorderRef.current = recorder
+      audioChunksRef.current = []
 
-        const response = await fetch('/api/upload-chunk', {
-          method: 'POST',
-          body: formData,
-        })
-
-        if (!response.ok) {
-          throw new Error(`Error subiendo chunk ${i + 1}/${totalChunks}`)
-        }
-
-        setUploadProgress(Math.round(((i + 1) / totalChunks) * 100))
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data)
       }
 
-      // Complete upload
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(audioChunksRef.current, { type: mimeType })
+        const url = URL.createObjectURL(blob)
+        setAudioBlob(blob)
+        setAudioUrl(url)
+        setStatusText('Grabación lista.')
+        setIsRecording(false)
+        onAudioAvailable?.(true, blob)
+      }
+
+      recorder.start(1000)
+      setIsRecording(true)
+      setStatusText('Grabando…')
+    } catch {
+      alert('No se pudo acceder al micrófono. Verifica los permisos.')
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+  }
+
+  // ── File upload (chunked) ────────────────────────────────────────────────
+
+  const uploadChunks = async (file: Blob, filename: string) => {
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+    const ext = (file instanceof File ? file.name.split('.').pop() : null) || 'webm'
+    const sessionId = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    uploadIdRef.current = sessionId
+
+    setIsUploading(true)
+    setUploadProgress(0)
+    setStatusText(`Subiendo (0/${totalChunks} partes)…`)
+
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE
+        const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
+
+        const fd = new FormData()
+        fd.append('chunk', new File([chunk], `chunk_${i}`, { type: file.type }))
+        fd.append('chunkIndex', String(i))
+        fd.append('totalChunks', String(totalChunks))
+        fd.append('uploadId', sessionId)
+        fd.append('nombre', filename)
+        fd.append('modo', 'default')
+        fd.append('extension', ext)
+
+        const res = await fetch('/api/upload-chunk', { method: 'POST', body: fd })
+        if (!res.ok) throw new Error(`Error en chunk ${i + 1}`)
+
+        const progress = Math.round(((i + 1) / totalChunks) * 100)
+        setUploadProgress(progress)
+        setStatusText(`Subiendo (${i + 1}/${totalChunks} partes)…`)
+      }
+
+      setStatusText('Finalizando subida…')
       const completeForm = new FormData()
       completeForm.append('uploadId', sessionId)
 
-      const completeResponse = await fetch('/api/upload-complete', {
-        method: 'POST',
-        body: completeForm,
-      })
+      const completeRes = await fetch('/api/upload-complete', { method: 'POST', body: completeForm })
+      const completeData = await completeRes.json()
 
-      const completeData = await completeResponse.json()
-
-      if (completeData.success) {
-        setStatusText(`✅ Audio procesado: ${nombre}`)
-        setAudioBlob(file)
-        const url = URL.createObjectURL(file)
-        setAudioUrl(url)
-        onAudioAvailable?.(true, file)
+      if (completeData.job_id) {
+        setStatusText('Procesando en el servidor…')
+        onJobStarted?.(completeData.job_id)
       } else {
-        setStatusText(`❌ Error: ${completeData.error || 'Error en el procesamiento'}`)
+        throw new Error(completeData.error || 'Error al completar la subida')
       }
     } catch (error: any) {
-      setStatusText(`❌ Error de subida: ${error.message}`)
-      // Cancel upload on error
-      if (sessionId) {
-        try {
-          await fetch('/api/upload-cancel', {
-            method: 'POST',
-            body: new URLSearchParams({ uploadId: sessionId }),
-          })
-        } catch {
-          // Ignore cancel errors
-        }
+      setStatusText(`❌ Error: ${error.message}`)
+      if (uploadIdRef.current) {
+        const cfd = new FormData()
+        cfd.append('uploadId', uploadIdRef.current)
+        fetch('/api/upload-cancel', { method: 'POST', body: cfd }).catch(() => {})
       }
     } finally {
       setIsUploading(false)
       setUploadProgress(-1)
-      setUploadId('')
+      uploadIdRef.current = ''
     }
   }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    e.target.value = ''
 
-    // For small files, use simple upload
-    if (file.size <= CHUNK_SIZE) {
-      const blob = new Blob([file])
-      setAudioBlob(blob)
-      const url = URL.createObjectURL(blob)
-      setAudioUrl(url)
-      setStatusText(`Grabación cargada: ${file.name}`)
-      onAudioAvailable?.(true, blob)
-    } else {
-      // For large files, use chunked upload
+    // Show local preview immediately
+    const url = URL.createObjectURL(file)
+    setAudioBlob(file)
+    setAudioUrl(url)
+    onAudioAvailable?.(true, file)
+
+    if (file.size > CHUNK_SIZE) {
+      // Large files go through chunked upload → job polling
       const nombre = file.name.replace(/\.[^/.]+$/, '')
-      const modo = 'default'
-      const email = ''
-      await uploadChunks(file, modo, email, nombre)
-    }
-  }
-
-  const handleRecord = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      setStatusText('Grabando...')
-      // Simplified recording - in production use MediaRecorder API
-      alert('Grabación iniciada')
-      onAudioAvailable?.(true)
-    } catch {
-      alert('No se pudo acceder al micrófono')
+      await uploadChunks(file, nombre)
+    } else {
+      setStatusText(`Archivo cargado: ${file.name}`)
     }
   }
 
@@ -135,25 +150,20 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
     if (audioUrl) URL.revokeObjectURL(audioUrl)
     setAudioBlob(null)
     setAudioUrl('')
-    setStatusText('Grabación borrada.')
+    setStatusText('Grabación eliminada.')
     onAudioAvailable?.(false)
   }
 
   const handleCancelUpload = async () => {
-    if (uploadId) {
-      try {
-        await fetch('/api/upload-cancel', {
-          method: 'POST',
-          body: new URLSearchParams({ uploadId }),
-        })
-      } catch {
-        // Ignore errors
-      }
-      setUploadId('')
-      setUploadProgress(-1)
-      setIsUploading(false)
-      setStatusText('Subida cancelada.')
+    if (uploadIdRef.current) {
+      const fd = new FormData()
+      fd.append('uploadId', uploadIdRef.current)
+      await fetch('/api/upload-cancel', { method: 'POST', body: fd }).catch(() => {})
+      uploadIdRef.current = ''
     }
+    setIsUploading(false)
+    setUploadProgress(-1)
+    setStatusText('Subida cancelada.')
   }
 
   return (
@@ -164,7 +174,7 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
         <button
           type="button"
           className="btn btn-record"
-          onClick={handleRecord}
+          onClick={startRecording}
           disabled={disabled || isRecording || isUploading}
         >
           🎤 Grabar
@@ -172,6 +182,7 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
         <button
           type="button"
           className="btn btn-stop"
+          onClick={stopRecording}
           disabled={disabled || !isRecording}
         >
           ⏹ Detener
@@ -180,7 +191,7 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
           type="button"
           className="btn btn-upload"
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || isUploading}
+          disabled={disabled || isRecording || isUploading}
         >
           📁 Cargar archivo
         </button>
@@ -189,7 +200,6 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
           type="file"
           accept="audio/*"
           onChange={handleFileUpload}
-          disabled={disabled || isUploading}
           style={{ display: 'none' }}
         />
         {isUploading && (
@@ -197,7 +207,7 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
             ✕ Cancelar
           </button>
         )}
-        {audioBlob && !isUploading && (
+        {audioBlob && !isRecording && !isUploading && (
           <>
             <button type="button" className="btn btn-download" onClick={() => {
               const a = document.createElement('a')
@@ -214,26 +224,20 @@ export default function AudioRecorder({ isRecording, setIsRecording, disabled = 
         )}
       </div>
 
-      {/* Progress bar for chunk uploads */}
       {uploadProgress >= 0 && (
         <div className="upload-progress">
           <div className="progress-bar">
-            <div
-              className="progress-fill"
-              style={{ width: `${uploadProgress}%` }}
-            />
+            <div className="progress-fill" style={{ width: `${uploadProgress}%` }} />
           </div>
           <span className="progress-text">{uploadProgress}%</span>
         </div>
       )}
 
-      {audioUrl && !isUploading && (
+      {audioUrl && !isRecording && (
         <audio controls src={audioUrl} className="audio-preview" />
       )}
 
-      {statusText && (
-        <p className="status-message">{statusText}</p>
-      )}
+      {statusText && <p className="status-message">{statusText}</p>}
     </section>
   )
 }

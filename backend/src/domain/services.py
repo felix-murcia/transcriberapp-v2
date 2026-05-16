@@ -71,7 +71,9 @@ class TranscriptionService:
                 audio_file.is_valid = False
 
             # 3. Transcribe
+            print(f"[SVC] Validacion OK. Transcribiendo: {audio_file.path}")
             transcription_text, metadata = self.transcriber.transcribe(audio_file.path)
+            print(f"[SVC] Transcripcion obtenida ({len(transcription_text)} chars): {transcription_text[:100]!r}")
             job.transcription_text = transcription_text
 
             # 4. Save transcription if enabled
@@ -81,7 +83,9 @@ class TranscriptionService:
                 )
 
             # 5. Summarize with AI
+            print(f"[SVC] Resumiendo con modo={job.mode}")
             summary_output = self.summarizer.summarize(transcription_text, job.mode)
+            print(f"[SVC] Resumen obtenido ({len(summary_output)} chars)")
             job.summary_output = summary_output
 
             # 6. Save output if enabled

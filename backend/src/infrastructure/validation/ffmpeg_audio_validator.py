@@ -32,40 +32,33 @@ class FFmpegAudioValidator(AudioValidatorPort):
             # Parse FFmpeg output to get basic info
             duration = None
             codec = None
-            streams = []
-            
+            has_audio_stream = False
+
             for line in result.stdout.split('\n'):
                 line = line.strip()
-                if line.startswith('duration='):
-                    duration = line.split('=')[1]
+                if line.startswith('duration=') and duration is None:
+                    duration = line.split('=', 1)[1]
                 elif line.startswith('codec_name='):
-                    codec = line.split('=')[1]
-                elif line.startswith('stream='):
-                    streams.append(line)
-            
+                    codec = line.split('=', 1)[1]
+                elif line == '[STREAM]':
+                    has_audio_stream = True
+
             # Basic validation checks
             issues = []
             warnings = []
-            
+
             # Check if file has audio streams
-            if not streams:
+            if not has_audio_stream:
                 issues.append("No audio streams found")
             
             # Check duration (basic check)
             if duration:
                 try:
-                    # Parse duration (HH:MM:SS.mmm)
-                    time_parts = duration.split(':')
-                    if len(time_parts) == 3:
-                        hours, minutes, seconds = time_parts
-                        total_seconds = float(hours) * 3600 + float(minutes) * 60 + float(seconds)
-                        
-                        # Check if audio is too long (basic check)
-                        if total_seconds > 3600:  # 1 hour
-                            warnings.append("Audio is longer than 1 hour")
-                            
+                    total_seconds = float(duration)
+                    if total_seconds > 3600:
+                        warnings.append("Audio is longer than 1 hour")
                 except ValueError:
-                    issues.append("Invalid duration format")
+                    pass
             
             # Check codec
             if codec and codec not in ['mp3', 'wav', 'webm', 'm4a', 'ogg', 'flac']:

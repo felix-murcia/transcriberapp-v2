@@ -15,6 +15,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.copilot-tracking/
 nosetests.xml
 coverage.xml
 *.cover
@@ -46,3 +47,5 @@ nginx.conf
 audios/
 outputs/
 transcripts/
+*.db
+CLAUDE.md
