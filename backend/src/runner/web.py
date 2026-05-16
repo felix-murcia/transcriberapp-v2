@@ -15,6 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.src.application.use_cases import ProcessAudioUseCase, ProcessTextUseCase
+from backend.src.infrastructure.email.system_email_sender import send_transcription_email
 from backend.src.infrastructure.dependency_injection import (
     create_transcription_service,
     get_background_tasks_adapter,
@@ -128,10 +129,23 @@ async def process_audio(
             job_id=job_id,
         )
 
+        success = result.get("status") == True or result.get("status") == "success"
+        if success and email:
+            try:
+                send_transcription_email(
+                    recipient=email,
+                    transcription=result.get("transcription", ""),
+                    summary=result.get("summary", ""),
+                    mode=mode,
+                    job_id=job_id,
+                )
+            except Exception as e:
+                print(f"[EMAIL] No enviado: {e}")
+
         return JSONResponse(
             status_code=200,
             content={
-                "success": result.get("status") == True or result.get("status") == "success",
+                "success": success,
                 "job_id": result.get("job_id"),
                 "transcription": result.get("transcription"),
                 "summary": result.get("summary"),
@@ -156,13 +170,7 @@ async def process_audio(
 
 
 @app.post("/api/process-text")
-async def process_text(
-    text: str = Form(...),
-    mode: str = Form(...),
-    filename: str = Form(default="text_input"),
-    email: str = Form(default=None),
-    background_tasks: BackgroundTasks = None,
-):
+async def process_text(payload: dict):
     """
     Process text for summarization.
 
@@ -176,12 +184,15 @@ async def process_text(
         JSON with job_id, transcription, and summary
     """
     job_id = str(uuid4())
+    text = (payload.get("text") or "").strip()
+    mode = payload.get("mode", "default")
+    filename = payload.get("filename", "text_input")
+    email = payload.get("email") or None
 
     try:
-        if not text or not text.strip():
+        if not text:
             raise HTTPException(status_code=400, detail="No text provided")
 
-        # Create use case and execute
         transcription_service = create_transcription_service()
         use_case = ProcessTextUseCase(transcription_service)
 
@@ -193,13 +204,15 @@ async def process_text(
             job_id=job_id,
         )
 
+        print(f"[process-text] mode={mode} markdown_len={len(result.get('markdown') or '')} transcription_len={len(text)}")
+
         return JSONResponse(
             status_code=200,
             content={
                 "success": result.get("status") == True or result.get("status") == "success",
                 "job_id": result.get("job_id"),
                 "transcription": result.get("transcription"),
-                "summary": result.get("summary"),
+                "markdown": result.get("markdown"),
                 "mode": result.get("mode"),
                 "error": result.get("error"),
             }
@@ -444,6 +457,26 @@ def process_audio_job(job_id: str, nombre: str, modo: str, email: str = None):
             )
         db.commit()
 
+        # Enviar email si se proporcionó dirección
+        if email and result.get("status") != "error":
+            try:
+                send_transcription_email(
+                    recipient=email,
+                    transcription=result.get("transcription", ""),
+                    summary=result.get("summary", ""),
+                    mode=modo,
+                    job_id=job_id,
+                )
+            except Exception as e:
+                print(f"[JOB {job_id}] Email no enviado: {e}")
+
+        # Eliminar audio original para liberar espacio
+        try:
+            audio_path.unlink()
+            print(f"[JOB {job_id}] Audio eliminado: {audio_path}")
+        except Exception as e:
+            print(f"[JOB {job_id}] No se pudo eliminar audio: {e}")
+
     except Exception as e:
         print(f"[JOB {job_id}] EXCEPTION: {e}")
         try:
@@ -538,6 +571,41 @@ def get_transcription(job_id: str):
             "summary_output": tr.summary_output,
             "created_at": tr.created_at.isoformat() if tr.created_at else None,
         }
+    finally:
+        db.close()
+
+
+@app.patch("/api/transcriptions/{job_id}")
+def rename_transcription(job_id: str, payload: dict):
+    """Rename a transcription (audio_filename)."""
+    new_name = (payload.get("audio_filename") or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="audio_filename required")
+    db = get_db()
+    try:
+        repo = TranscriptionRepository(db)
+        tr = repo.get_by_job_id(job_id)
+        if not tr:
+            raise HTTPException(status_code=404, detail="Not found")
+        tr.audio_filename = new_name
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/transcriptions/{job_id}")
+def delete_transcription(job_id: str):
+    """Delete a transcription."""
+    db = get_db()
+    try:
+        repo = TranscriptionRepository(db)
+        tr = repo.get_by_job_id(job_id)
+        if not tr:
+            raise HTTPException(status_code=404, detail="Not found")
+        repo.delete(job_id)
+        db.commit()
+        return {"ok": True}
     finally:
         db.close()
 

@@ -13,6 +13,7 @@ interface LoadedResult {
   summary: string
   mode: string
   jobId: string
+  audioFilename: string
 }
 
 interface HistoryPanelProps {
@@ -24,6 +25,8 @@ interface HistoryPanelProps {
 export default function HistoryPanel({ isOpen, onClose, onLoad }: HistoryPanelProps) {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
 
   useEffect(() => {
     if (!isOpen) return
@@ -45,10 +48,42 @@ export default function HistoryPanel({ isOpen, onClose, onLoad }: HistoryPanelPr
         summary: data.summary_output || '',
         mode: data.mode,
         jobId: data.job_id,
+        audioFilename: data.audio_filename || '',
       })
     } catch {
       alert('No se pudo cargar la transcripción.')
     }
+  }
+
+  const startEdit = (item: HistoryItem, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditingId(item.job_id)
+    setEditName(item.audio_filename)
+  }
+
+  const commitRename = async (jobId: string) => {
+    const name = editName.trim()
+    if (!name) { setEditingId(null); return }
+    try {
+      const res = await fetch(`/api/transcriptions/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_filename: name }),
+      })
+      if (res.ok) {
+        setItems(prev => prev.map(i => i.job_id === jobId ? { ...i, audio_filename: name } : i))
+      }
+    } catch { /* silent */ }
+    setEditingId(null)
+  }
+
+  const handleDelete = async (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm('¿Eliminar esta transcripción?')) return
+    try {
+      const res = await fetch(`/api/transcriptions/${jobId}`, { method: 'DELETE' })
+      if (res.ok) setItems(prev => prev.filter(i => i.job_id !== jobId))
+    } catch { /* silent */ }
   }
 
   const formatDate = (iso: string | null) => {
@@ -68,9 +103,38 @@ export default function HistoryPanel({ isOpen, onClose, onLoad }: HistoryPanelPr
       )}
       <ul className="history-list">
         {items.map(item => (
-          <li key={item.job_id} onClick={() => handleSelect(item.job_id)} className="history-item">
-            <span className="history-name">{item.audio_filename}</span>
-            <small className="history-meta">{item.mode} · {formatDate(item.created_at)}</small>
+          <li key={item.job_id} className="history-item" onClick={() => handleSelect(item.job_id)}>
+            <div className="history-item-body">
+              {editingId === item.job_id ? (
+                <input
+                  className="history-rename-input"
+                  value={editName}
+                  autoFocus
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => setEditName(e.target.value)}
+                  onBlur={() => commitRename(item.job_id)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') commitRename(item.job_id)
+                    if (e.key === 'Escape') setEditingId(null)
+                  }}
+                />
+              ) : (
+                <span className="history-name">{item.audio_filename}</span>
+              )}
+              <small className="history-meta">{item.mode} · {formatDate(item.created_at)}</small>
+            </div>
+            <div className="history-item-actions">
+              <button
+                className="history-action-btn"
+                title="Renombrar"
+                onClick={e => startEdit(item, e)}
+              >✏️</button>
+              <button
+                className="history-action-btn history-action-delete"
+                title="Eliminar"
+                onClick={e => handleDelete(item.job_id, e)}
+              >🗑️</button>
+            </div>
           </li>
         ))}
       </ul>

@@ -10,6 +10,8 @@ interface ProcessingResult {
 interface AppState {
   sessionName: string
   setSessionName: (name: string) => void
+  sessionInputValue: string
+  setSessionInputValue: (value: string) => void
   audioBlob: Blob | null
   setAudioBlob: (blob: Blob | null) => void
   audioUrl: string
@@ -23,6 +25,8 @@ interface AppState {
 const AppContext = createContext<AppState>({
   sessionName: '',
   setSessionName: () => {},
+  sessionInputValue: '',
+  setSessionInputValue: () => {},
   audioBlob: null,
   setAudioBlob: () => {},
   audioUrl: '',
@@ -35,16 +39,19 @@ const AppContext = createContext<AppState>({
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sessionName, setSessionName] = useState('')
+  const [sessionInputValue, setSessionInputValue] = useState('')
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [audioUrl, setAudioUrl] = useState('')
   const [processingResult, setProcessingResult] = useState<ProcessingResult | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
 
   return (
-    <AppContext.Provider value={{ 
-      sessionName, 
-      setSessionName, 
-      audioBlob, 
+    <AppContext.Provider value={{
+      sessionName,
+      setSessionName,
+      sessionInputValue,
+      setSessionInputValue,
+      audioBlob,
       setAudioBlob,
       audioUrl,
       setAudioUrl,

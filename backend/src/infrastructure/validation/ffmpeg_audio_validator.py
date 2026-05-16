@@ -32,7 +32,7 @@ class FFmpegAudioValidator(AudioValidatorPort):
             # Parse FFmpeg output to get basic info
             duration = None
             codec = None
-            has_audio_stream = False
+            stream_count = 0
 
             for line in result.stdout.split('\n'):
                 line = line.strip()
@@ -41,7 +41,9 @@ class FFmpegAudioValidator(AudioValidatorPort):
                 elif line.startswith('codec_name='):
                     codec = line.split('=', 1)[1]
                 elif line == '[STREAM]':
-                    has_audio_stream = True
+                    stream_count += 1
+
+            has_audio_stream = stream_count > 0
 
             # Basic validation checks
             issues = []
@@ -82,7 +84,7 @@ class FFmpegAudioValidator(AudioValidatorPort):
                 "metadata": {
                     "duration": duration,
                     "codec": codec,
-                    "streams": len(streams),
+                    "streams": stream_count,
                     "file_size": file_path_obj.stat().st_size if file_path_obj.exists() else None
                 }
             }

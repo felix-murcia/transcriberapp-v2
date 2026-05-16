@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 const MODO_OPTIONS = [
-  { value: 'default', label: 'Default' },
+  { value: 'default', label: 'Resumen' },
   { value: 'tecnico', label: 'Técnico' },
   { value: 'refinamiento', label: 'Refinamiento' },
   { value: 'ejecutivo', label: 'Ejecutivo' },

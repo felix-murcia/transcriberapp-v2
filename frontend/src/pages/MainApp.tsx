@@ -16,7 +16,7 @@ interface ProcessingResult {
 }
 
 function MainAppContent() {
-  const { sessionName } = useAppContext()
+  const { sessionName, setSessionName, setSessionInputValue } = useAppContext()
 
   const [showChat, setShowChat] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -25,13 +25,19 @@ function MainAppContent() {
   const [results, setResults] = useState<ProcessingResult | null>(null)
   const [email, setEmail] = useState('')
   const [modo, setModo] = useState('default')
+  const handleSetModo = (m: string) => { setModo(m); setStatusText('') }
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [statusText, setStatusText] = useState('')
+  const [processedModes, setProcessedModes] = useState<Set<string>>(new Set())
+  // transcription text available from history (no audio needed to re-summarize)
+  const [historyTranscription, setHistoryTranscription] = useState<string | null>(null)
 
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isSessionActive = sessionName.length >= 5
-  const canProcess = isSessionActive && hasAudio && !isProcessing
+  const modoAlreadyProcessed = processedModes.has(modo)
+  const hasContent = hasAudio || historyTranscription !== null
+  const canProcess = isSessionActive && hasContent && !isProcessing && !modoAlreadyProcessed
 
   // ── Polling ──────────────────────────────────────────────────────────────
 
@@ -53,12 +59,12 @@ function MainAppContent() {
           setResults(result)
           setIsProcessing(false)
           setStatusText('')
+          setProcessedModes(prev => new Set(prev).add(result.mode))
           saveToDb(result, jobId)
         } else if (data.status === 'failed') {
           setIsProcessing(false)
           setStatusText(`❌ Error: ${data.error || 'El procesamiento falló'}`)
         } else {
-          // still processing
           pollingRef.current = setTimeout(check, 3000)
         }
       } catch {
@@ -84,16 +90,58 @@ function MainAppContent() {
         }),
       })
     } catch {
-      // Non-critical — don't surface to user
+      // Non-critical
     }
   }
 
-  // ── Process (small files / recordings) ──────────────────────────────────
+  // ── Process ──────────────────────────────────────────────────────────────
 
   const handleProcess = async () => {
-    if (!canProcess || !audioBlob) return
+    if (!canProcess) return
 
     setIsProcessing(true)
+
+    // Re-summarize from existing transcription text (loaded from history)
+    if (historyTranscription !== null && !hasAudio) {
+      setStatusText('Generando resumen…')
+      try {
+        const res = await fetch('/api/process-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: historyTranscription,
+            mode: modo,
+            filename: sessionName,
+            email: email || null,
+          }),
+        })
+        const data = await res.json()
+        const summary = data.markdown || data.summary || ''
+        if ((data.success || data.status === true) && summary) {
+          const result: ProcessingResult = {
+            transcription: historyTranscription,
+            summary,
+            mode: data.mode || modo,
+            jobId: data.job_id,
+          }
+          setResults(result)
+          setIsProcessing(false)
+          setStatusText('')
+          setProcessedModes(prev => new Set(prev).add(result.mode))
+          saveToDb(result, data.job_id)
+        } else {
+          setIsProcessing(false)
+          setStatusText(`❌ Error: ${data.error || 'No se pudo generar el resumen. Inténtalo de nuevo.'}`)
+        }
+      } catch (err: any) {
+        setIsProcessing(false)
+        setStatusText(`❌ Error de red: ${err.message}`)
+      }
+      return
+    }
+
+    // Normal audio processing
+    if (!audioBlob) return
     setStatusText('Enviando audio…')
 
     try {
@@ -105,7 +153,7 @@ function MainAppContent() {
       const res = await fetch('/api/process-audio', { method: 'POST', body: fd })
       const data = await res.json()
 
-      if (data.success) {
+      if (data.success && (data.transcription || data.summary)) {
         const result: ProcessingResult = {
           transcription: data.transcription || '',
           summary: data.summary || '',
@@ -115,10 +163,11 @@ function MainAppContent() {
         setResults(result)
         setIsProcessing(false)
         setStatusText('')
+        setProcessedModes(prev => new Set(prev).add(result.mode))
         saveToDb(result, data.job_id)
       } else {
         setIsProcessing(false)
-        setStatusText(`❌ Error: ${data.error || 'Procesamiento fallido'}`)
+        setStatusText(`❌ Error: ${data.error || 'No se obtuvo resultado. Inténtalo de nuevo.'}`)
       }
     } catch (err: any) {
       setIsProcessing(false)
@@ -126,23 +175,32 @@ function MainAppContent() {
     }
   }
 
-  // ── Callbacks from AudioRecorder ─────────────────────────────────────────
+  // ── Callbacks ─────────────────────────────────────────────────────────────
 
   const handleAudioAvailable = (available: boolean, blob?: Blob) => {
     setHasAudio(available)
     setAudioBlob(blob ?? null)
+    if (available) {
+      setProcessedModes(new Set())
+      setHistoryTranscription(null)
+    }
   }
 
-  // Called when a large file finishes chunked upload and the server starts processing
   const handleJobStarted = (jobId: string) => {
     setIsProcessing(true)
     setStatusText('Procesando en el servidor…')
     pollJobStatus(jobId)
   }
 
-  // Called from HistoryPanel when user loads a past transcription
-  const handleLoadHistory = (item: ProcessingResult) => {
+  const handleLoadHistory = (item: ProcessingResult & { audioFilename: string }) => {
     setResults(item)
+    setProcessedModes(new Set([item.mode]))
+    setHistoryTranscription(item.transcription)
+    setHasAudio(false)
+    setAudioBlob(null)
+    setStatusText('')
+    setSessionInputValue(item.audioFilename)
+    setSessionName(item.audioFilename)
     setShowHistory(false)
   }
 
@@ -156,7 +214,7 @@ function MainAppContent() {
           email={email}
           setEmail={setEmail}
           modo={modo}
-          setModo={setModo}
+          setModo={handleSetModo}
         />
         <AudioRecorder
           disabled={!isSessionActive}
@@ -169,7 +227,13 @@ function MainAppContent() {
             className="btn btn-primary btn-process"
             onClick={handleProcess}
             disabled={!canProcess}
-            title={canProcess ? 'Enviar y procesar audio' : 'Requiere sesión activa y audio'}
+            title={
+              modoAlreadyProcessed
+                ? 'Este modo ya fue procesado para este audio'
+                : canProcess
+                ? 'Enviar y procesar'
+                : 'Requiere sesión activa y audio o transcripción cargada'
+            }
           >
             {isProcessing ? '⏳ Procesando…' : '🚀 Enviar y Procesar'}
           </button>
@@ -195,16 +259,15 @@ function MainAppContent() {
       <button
         className="floating-btn chat-toggle"
         onClick={() => setShowChat(!showChat)}
-        disabled={!isSessionActive}
-        title={isSessionActive ? 'Chat con IA' : 'Requiere sesión activa'}
+        disabled={!results}
+        title={results ? 'Chat con IA' : 'Requiere una transcripción activa'}
       >
         💬
       </button>
       <button
         className="floating-btn history-toggle"
         onClick={() => setShowHistory(!showHistory)}
-        disabled={!isSessionActive}
-        title={isSessionActive ? 'Historial' : 'Requiere sesión activa'}
+        title="Historial"
       >
         📋
       </button>
