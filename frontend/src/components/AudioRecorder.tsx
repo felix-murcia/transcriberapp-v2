@@ -88,7 +88,7 @@ export default function AudioRecorder({ disabled = false, onAudioAvailable, onJo
         fd.append('totalChunks', String(totalChunks))
         fd.append('uploadId', sessionId)
         fd.append('nombre', filename)
-        fd.append('modo', 'default')
+        fd.append('modo', 'resumen')
         fd.append('extension', ext)
 
         const res = await fetch('/api/upload-chunk', { method: 'POST', body: fd })
