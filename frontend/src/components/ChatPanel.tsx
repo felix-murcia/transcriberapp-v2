@@ -109,7 +109,7 @@ export default function ChatPanel({ isOpen, onClose, transcription, summaries, j
   return (
     <div className={`chat-panel ${isOpen ? 'open' : ''}`}>
       <div className="chat-header">
-        <span>Chat IA</span>
+        <span>Agente IA</span>
         <button className="btn-close" onClick={onClose}>✕</button>
       </div>
       <div className="chat-messages">
