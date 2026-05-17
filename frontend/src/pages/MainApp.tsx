@@ -233,11 +233,13 @@ function MainAppContent() {
           modo={modo}
           setModo={handleSetModo}
         />
-        <AudioRecorder
-          disabled={!isSessionActive}
-          onAudioAvailable={handleAudioAvailable}
-          onJobStarted={handleJobStarted}
-        />
+        {!results && (
+          <AudioRecorder
+            disabled={!isSessionActive}
+            onAudioAvailable={handleAudioAvailable}
+            onJobStarted={handleJobStarted}
+          />
+        )}
         <div className="process-section">
           {statusText && <p className="status-message">{statusText}</p>}
           <button
@@ -263,7 +265,7 @@ function MainAppContent() {
         isOpen={showChat}
         onClose={() => setShowChat(false)}
         transcription={results?.transcription ?? ''}
-        summary={results ? (results.summaries[results.mode] ?? Object.values(results.summaries)[0] ?? '') : ''}
+        summaries={results?.summaries ?? {}}
         jobId={results?.jobId ?? ''}
       />
 

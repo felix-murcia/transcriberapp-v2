@@ -10,11 +10,11 @@ interface ChatPanelProps {
   isOpen: boolean
   onClose: () => void
   transcription: string
-  summary: string
+  summaries: Record<string, string>
   jobId: string
 }
 
-export default function ChatPanel({ isOpen, onClose, transcription, summary, jobId }: ChatPanelProps) {
+export default function ChatPanel({ isOpen, onClose, transcription, summaries, jobId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -50,7 +50,7 @@ export default function ChatPanel({ isOpen, onClose, transcription, summary, job
     const msg = input.trim()
     if (!msg || isStreaming) return
 
-    if (!transcription && !summary) {
+    if (!transcription && Object.keys(summaries).length === 0) {
       alert('No hay transcripción disponible. Procesa un audio primero.')
       return
     }
@@ -69,7 +69,7 @@ export default function ChatPanel({ isOpen, onClose, transcription, summary, job
       const res = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, transcription, summary, history }),
+        body: JSON.stringify({ message: msg, transcription, summaries, history }),
       })
 
       if (!res.body) throw new Error('No stream body')
@@ -116,7 +116,7 @@ export default function ChatPanel({ isOpen, onClose, transcription, summary, job
         {messages.length === 0 && (
           <p className="chat-empty">
             {transcription
-              ? 'Haz una pregunta sobre la transcripción.'
+              ? 'Haz preguntas sobre la transcripción o cualquiera de los resúmenes generados.'
               : 'Procesa un audio para comenzar el chat.'}
           </p>
         )}

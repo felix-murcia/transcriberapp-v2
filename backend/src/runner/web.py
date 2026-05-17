@@ -714,53 +714,95 @@ def get_conversation(job_id: str):
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 GEMINI_MODEL = os.getenv("USE_MODEL", "gemini-2.5-flash-lite")
 
+_MODE_LABELS = {
+    "resumen": "Resumen general",
+    "tecnico": "Análisis técnico",
+    "ejecutivo": "Resumen ejecutivo",
+    "refinamiento": "Refinamiento",
+    "bullet": "Puntos clave (bullet points)",
+    "comparative": "Análisis comparativo",
+    "product_manager": "Perspectiva Product Manager",
+    "project_manager": "Perspectiva Project Manager",
+    "quality_assurance": "Perspectiva Quality Assurance",
+}
+
+
+def _build_system_instruction(transcription: str, summaries: dict) -> str:
+    parts = [
+        "Eres un asistente experto en análisis de contenido de audio.",
+        "Tu función es responder preguntas sobre una transcripción y los resúmenes que se han generado a partir de ella.",
+        "",
+        "REGLAS ESTRICTAS:",
+        "- Responde SIEMPRE basándote exclusivamente en el contenido proporcionado a continuación.",
+        "- Si el usuario pregunta por un modo concreto (técnico, ejecutivo, bullet, etc.), trabaja con ese resumen específico.",
+        "- Si pregunta por la transcripción, trabaja con el texto original.",
+        "- Si la pregunta es ambigua, usa todos los contextos disponibles y aclara de cuál extraes la respuesta.",
+        "- No inventes ni añadas información que no esté en el contexto.",
+        "- Sé preciso, directo y útil. Evita respuestas vagas o genéricas.",
+        "- Responde en el mismo idioma que el usuario.",
+        "",
+        "═" * 60,
+        "CONTENIDO DE REFERENCIA",
+        "═" * 60,
+    ]
+
+    if transcription:
+        parts += ["", "TRANSCRIPCIÓN COMPLETA:", "─" * 40, transcription]
+
+    if summaries:
+        parts += ["", "RESÚMENES GENERADOS:", "─" * 40]
+        for mode, summary in summaries.items():
+            if summary:
+                label = _MODE_LABELS.get(mode, mode.replace("_", " ").title())
+                parts += [f"\n## {label}:", summary]
+
+    parts += ["", "═" * 60]
+    return "\n".join(parts)
+
 
 @app.post("/api/chat/stream")
 async def chat_stream(payload: dict):
     """Stream a chat response from Gemini given transcription context."""
     message = payload.get("message", "")
     transcription = payload.get("transcription", "")
-    summary = payload.get("summary", "")
+    summaries = payload.get("summaries") or {}
     history = payload.get("history", [])
 
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
 
-    system_context = "Eres un asistente que ayuda a analizar transcripciones de audio.\n\n"
-    if transcription:
-        system_context += f"TRANSCRIPCIÓN:\n{transcription}\n\n"
-    if summary:
-        system_context += f"RESUMEN:\n{summary}\n\n"
-    system_context += "Responde las preguntas del usuario basándote en este contenido."
+    system_instruction = _build_system_instruction(transcription, summaries)
 
+    # Build conversation history (exclude current message, it's in `message`)
     contents = []
-    for h in history[:-1]:  # exclude the last user message, we add it below
-        contents.append({"role": h["role"] if h["role"] != "assistant" else "model", "parts": [{"text": h["content"]}]})
-    # system context as first user turn if no history
-    if not contents:
-        contents.append({"role": "user", "parts": [{"text": system_context}]})
-        contents.append({"role": "model", "parts": [{"text": "Entendido, estoy listo para responder preguntas sobre la transcripción."}]})
+    for h in history[:-1]:
+        role = "model" if h["role"] == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": h["content"]}]})
     contents.append({"role": "user", "parts": [{"text": message}]})
 
-    def generate():
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_MODEL}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}"
-        )
+    import httpx as _httpx
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}"
+    )
+    body = {
+        "systemInstruction": {"parts": [{"text": system_instruction}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 4096},
+    }
+
+    async def generate():
         try:
-            with requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={"contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}},
-                stream=True,
-                timeout=60,
-            ) as resp:
-                if resp.status_code != 200:
-                    yield f"[Error Gemini: {resp.status_code}]"
-                    return
-                for line in resp.iter_lines():
-                    if line and line.startswith(b"data: "):
-                        data_str = line[6:].decode("utf-8")
+            async with _httpx.AsyncClient(timeout=60) as client:
+                async with client.stream("POST", url, headers={"Content-Type": "application/json"}, json=body) as resp:
+                    if resp.status_code != 200:
+                        yield f"[Error Gemini: {resp.status_code}]"
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
                         if data_str == "[DONE]":
                             break
                         try:
@@ -778,7 +820,11 @@ async def chat_stream(payload: dict):
         except Exception as e:
             yield f"\n[Error: {str(e)}]"
 
-    return StreamingResponse(generate(), media_type="text/plain")
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 if __name__ == "__main__":
