@@ -1,0 +1,76 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    networks:
+      - transcriberapp-network
+    env_file:
+      - .env.prod
+    volumes:
+      - /tmp/logs:/app/logs
+      - /tmp/data:/app/data
+      - /tmp/audios:/app/audios
+      - /tmp/audios/audios_chunks:/app/audios/audios_chunks
+      - /tmp/transcripts:/app/transcripts
+      - /tmp/outputs:/app/outputs
+      - /tmp/outputs/metrics:/app/outputs/metrics
+      - /tmp/recordings:/app/recordings
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:80"
+    networks:
+      - transcriberapp-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    networks:
+      - transcriberapp-network
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./frontend/dist:/usr/share/nginx/html
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: transcriberapp
+      POSTGRES_USER: transcriber
+      POSTGRES_PASSWORD: transcriberpass
+    networks:
+      - transcriberapp-network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - transcriberapp-network
+    restart: unless-stopped
+
+networks:
+  transcriberapp-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

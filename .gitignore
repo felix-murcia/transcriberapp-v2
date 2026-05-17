@@ -29,16 +29,14 @@ dmypy.json
 .copilot-tracking/
 docs/qa/
 node_modules/
-dist/
+frontend/dist/assets/
 build/
 *.egg-info/
 *.egg
 *.log
 # Docker files
-Dockerfile
 Dockerfile.dev
-Dockerfile.frontend
-docker-compose*.yml
+docker-compose.dev.yml
 .env
 .env.dev
 .env.prod

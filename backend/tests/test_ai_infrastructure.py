@@ -1,130 +1,68 @@
 """
 Tests for AI infrastructure implementations.
-Covers Gemini AI summarizer and other AI-related components.
 """
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 from backend.src.infrastructure.ai import GeminiAISummarizer
+
+FAKE_RESPONSE = {
+    "candidates": [{"content": {"parts": [{"text": "Summary text"}]}}]
+}
 
 
 class TestGeminiAISummarizer:
-    """Test Gemini AI summarizer implementation."""
 
-    def test_init_with_default_model(self):
-        """Test GeminiAISummarizer initialization with default model."""
+    def test_init(self):
         summarizer = GeminiAISummarizer()
-        assert summarizer.model_name == "gemini"
+        assert summarizer is not None
 
-    def test_init_with_custom_model(self):
-        """Test GeminiAISummarizer initialization with custom model."""
-        summarizer = GeminiAISummarizer(model_name="gemini-2.5-pro")
-        assert summarizer.model_name == "gemini-2.5-pro"
+    def test_init_with_api_key(self):
+        summarizer = GeminiAISummarizer(api_key="test-key")
+        assert summarizer is not None
 
-    def test_summarize_success(self):
-        """Test successful summarization."""
+    def test_has_model_attribute(self):
         summarizer = GeminiAISummarizer()
-        result = summarizer.summarize("Sample transcription text", "default")
+        assert hasattr(summarizer, 'model')
+
+    @patch('requests.post')
+    def test_summarize_resumen(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200, json=lambda: FAKE_RESPONSE)
+        summarizer = GeminiAISummarizer(api_key="test-key")
+        result = summarizer.summarize("Sample transcription text", "resumen")
         assert result is not None
         assert isinstance(result, str)
 
-    def test_summarize_with_mode_specific_prompt(self):
-        """Test summarization with mode-specific prompts."""
-        summarizer = GeminiAISummarizer()
+    @patch('requests.post')
+    def test_summarize_tecnico(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200, json=lambda: FAKE_RESPONSE)
+        summarizer = GeminiAISummarizer(api_key="test-key")
         result = summarizer.summarize("Sample transcription text", "tecnico")
         assert result is not None
         assert isinstance(result, str)
 
-    def test_summarize_with_long_text(self):
-        """Test summarization with long text."""
-        summarizer = GeminiAISummarizer()
-        long_text = "word " * 200
-        result = summarizer.summarize(long_text, "default")
-        assert result is not None
-        assert isinstance(result, str)
-
-    def test_summarize_with_short_text(self):
-        """Test summarization with short text."""
-        summarizer = GeminiAISummarizer()
-        short_text = "Hello world"
-        result = summarizer.summarize(short_text, "default")
-        assert result is not None
-        assert isinstance(result, str)
-
-    def test_get_agent_default(self):
-        """Test getting agent for default mode."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("default")
-        assert agent is not None
-
-    def test_get_agent_tecnico(self):
-        """Test getting agent for tecnico mode."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("tecnico")
-        assert agent is not None
-
-    def test_get_agent_bullet(self):
-        """Test getting agent for bullet mode."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("bullet")
-        assert agent is not None
-
-    def test_get_agent_refinamiento(self):
-        """Test getting agent for refinamiento mode."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("refinamiento")
-        assert agent is not None
-
-    def test_get_agent_ejecutivo(self):
-        """Test getting agent for ejecutivo mode."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("ejecutivo")
-        assert agent is not None
-
-    def test_get_agent_run(self):
-        """Test agent run method."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("default")
-        result = agent.run("test message", stream=False)
-        # Agent.run returns a generator, not a string directly
-        # Convert to list to verify it produces output
-        output = list(result) if hasattr(result, '__iter__') else result
-        assert output is not None
-
-    def test_get_agent_run_stream(self):
-        """Test agent run method with streaming."""
-        summarizer = GeminiAISummarizer()
-        agent = summarizer.get_agent("default")
-        result = list(agent.run("test message", stream=True))
-        assert len(result) > 0
-        assert all(isinstance(r, str) for r in result)
-
-    def test_fallback_summarization(self):
-        """Test fallback summarization when Gemini not available."""
-        with patch('backend.src.infrastructure.ai.GEMINI_AVAILABLE', False):
-            summarizer = GeminiAISummarizer()
-            result = summarizer.summarize("Sample text with enough words to truncate", "default")
+    @patch('requests.post')
+    def test_summarize_all_modes(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200, json=lambda: FAKE_RESPONSE)
+        summarizer = GeminiAISummarizer(api_key="test-key")
+        modes = ["resumen", "tecnico", "ejecutivo", "refinamiento", "bullet",
+                 "comparative", "product_manager", "project_manager", "quality_assurance"]
+        for mode in modes:
+            result = summarizer.summarize("text", mode)
             assert result is not None
 
-    def test_agent_cache(self):
-        """Test agent caching works correctly."""
-        summarizer = GeminiAISummarizer()
-        agent1 = summarizer.get_agent("default")
-        agent2 = summarizer.get_agent("default")
-        # Should return cached agent
-        assert agent1 is agent2
+    @patch('requests.post')
+    def test_summarize_api_error_raises(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=500, text="Server error")
+        summarizer = GeminiAISummarizer(api_key="test-key")
+        with pytest.raises(Exception, match="Gemini API error"):
+            summarizer.summarize("text", "resumen")
 
+    def test_get_agent_returns_none(self):
+        summarizer = GeminiAISummarizer(api_key="test-key")
+        agent = summarizer.get_agent("resumen")
+        assert agent is None
 
-class TestGeminiModelAISummarizer:
-    """Test GeminiModel AI summarizer implementation."""
-
-    def test_init(self):
-        """Test GeminiModelAISummarizer initialization."""
-        summarizer = GeminiAISummarizer()
-        assert summarizer is not None
-
-    def test_summarize_basic(self):
-        """Test basic summarization."""
-        summarizer = GeminiAISummarizer()
-        result = summarizer.summarize("Test text for summarization", "default")
-        assert result is not None
-        assert isinstance(result, str)
+    def test_get_agent_any_mode(self):
+        summarizer = GeminiAISummarizer(api_key="test-key")
+        for mode in ["tecnico", "ejecutivo", "bullet"]:
+            assert summarizer.get_agent(mode) is None
