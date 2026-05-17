@@ -11,7 +11,7 @@ load_dotenv()
 
 APP_VERSION = random.randint(1, 1000000)  # Para evitar cache en el frontend
 AVAILABLE_MODES = [
-    "default", "tecnico", "refinamiento", "ejecutivo", "bullet",
+    "resumen", "tecnico", "refinamiento", "ejecutivo", "bullet",
     "comparative", "product_manager", "project_manager", "quality_assurance"
 ]
 
@@ -26,7 +26,7 @@ GROQ_MODEL_TRANSCRIBER = os.getenv("GROQ_MODEL_TRANSCRIBER")
 FFMPEG_API_URL = os.getenv("FFMPEG_API_URL", "http://ffmpeg-api-prod:8080")
 
 AVAILABLE_MODES_DICT = {
-    "default": "default",
+    "resumen": "resumen",
     "tecnico": "tecnico",
     "refinamiento": "refinamiento",
     "ejecutivo": "ejecutivo",

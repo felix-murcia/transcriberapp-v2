@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 const MODO_OPTIONS = [
-  { value: 'default', label: 'Resumen' },
+  { value: 'resumen', label: 'Resumen' },
   { value: 'tecnico', label: 'Técnico' },
   { value: 'refinamiento', label: 'Refinamiento' },
   { value: 'ejecutivo', label: 'Ejecutivo' },
@@ -24,11 +24,11 @@ export default function FormConfig({
   disabled = false,
   email = '',
   setEmail,
-  modo = 'default',
+  modo = 'resumen',
   setModo,
 }: FormConfigProps) {
   const localEmail = email || ''
-  const localModo = modo || 'default'
+  const localModo = modo || 'resumen'
 
   return (
     <section className={`card ${disabled ? 'disabled' : ''}`} aria-labelledby="formTitle">

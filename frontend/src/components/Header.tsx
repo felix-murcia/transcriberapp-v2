@@ -1,6 +1,10 @@
 import { useAppContext } from '../context/AppContext'
 
-export default function Header() {
+interface HeaderProps {
+  jobId?: string | null
+}
+
+export default function Header({ jobId }: HeaderProps) {
   const { sessionName } = useAppContext()
   const isActive = sessionName.length >= 5
 
@@ -15,6 +19,11 @@ export default function Header() {
           {isActive ? sessionName : 'Sin sesión'}
         </span>
       </h1>
+      {jobId && (
+        <p className="header-job-id">
+          Job ID: <code>{jobId}</code>
+        </p>
+      )}
     </header>
   )
 }

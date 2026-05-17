@@ -10,7 +10,7 @@ import { AppProvider, useAppContext } from '../context/AppContext'
 
 interface ProcessingResult {
   transcription: string
-  summary: string
+  summaries: Record<string, string>
   mode: string
   jobId: string
 }
@@ -24,7 +24,7 @@ function MainAppContent() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [results, setResults] = useState<ProcessingResult | null>(null)
   const [email, setEmail] = useState('')
-  const [modo, setModo] = useState('default')
+  const [modo, setModo] = useState('resumen')
   const handleSetModo = (m: string) => { setModo(m); setStatusText('') }
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [statusText, setStatusText] = useState('')
@@ -32,6 +32,7 @@ function MainAppContent() {
   // transcription text available from history (no audio needed to re-summarize)
   const [historyTranscription, setHistoryTranscription] = useState<string | null>(null)
 
+  const [activeMode, setActiveMode] = useState<string | null>(null)
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isSessionActive = sessionName.length >= 5
@@ -50,17 +51,22 @@ function MainAppContent() {
         const data = await res.json()
 
         if (data.status === 'completed') {
-          const result: ProcessingResult = {
-            transcription: data.transcription || '',
-            summary: data.summary || '',
-            mode: data.mode || modo,
-            jobId,
-          }
-          setResults(result)
+          const resultMode = data.mode || modo
+          setResults(prev => {
+            const prevSummaries = prev?.summaries || {}
+            const newSummaries = { ...prevSummaries, [resultMode]: data.summary || '' }
+            return {
+              transcription: data.transcription || prev?.transcription || '',
+              summaries: newSummaries,
+              mode: resultMode,
+              jobId,
+            }
+          })
           setIsProcessing(false)
           setStatusText('')
-          setProcessedModes(prev => new Set(prev).add(result.mode))
-          saveToDb(result, jobId)
+          setActiveMode(resultMode)
+          setProcessedModes(prev => new Set(prev).add(resultMode))
+          saveToDb({ transcription: data.transcription || '', summaries: { [resultMode]: data.summary || '' }, mode: resultMode, jobId }, jobId)
         } else if (data.status === 'failed') {
           setIsProcessing(false)
           setStatusText(`❌ Error: ${data.error || 'El procesamiento falló'}`)
@@ -77,6 +83,7 @@ function MainAppContent() {
 
   const saveToDb = async (result: ProcessingResult, jobId: string) => {
     try {
+      const summary = result.summaries[result.mode] || ''
       await fetch('/api/transcriptions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -85,7 +92,7 @@ function MainAppContent() {
           audio_filename: sessionName,
           mode: result.mode,
           transcription_text: result.transcription,
-          summary_output: result.summary,
+          summary_output: summary,
           email: email || null,
         }),
       })
@@ -118,17 +125,21 @@ function MainAppContent() {
         const data = await res.json()
         const summary = data.markdown || data.summary || ''
         if ((data.success || data.status === true) && summary) {
-          const result: ProcessingResult = {
-            transcription: historyTranscription,
-            summary,
-            mode: data.mode || modo,
-            jobId: data.job_id,
-          }
-          setResults(result)
+          const resultMode = data.mode || modo
+          setResults(prev => {
+            const prevSummaries = prev?.summaries || {}
+            return {
+              transcription: historyTranscription,
+              summaries: { ...prevSummaries, [resultMode]: summary },
+              mode: resultMode,
+              jobId: data.job_id,
+            }
+          })
           setIsProcessing(false)
           setStatusText('')
-          setProcessedModes(prev => new Set(prev).add(result.mode))
-          saveToDb(result, data.job_id)
+          setActiveMode(resultMode)
+          setProcessedModes(prev => new Set(prev).add(resultMode))
+          saveToDb({ transcription: historyTranscription, summaries: { [resultMode]: summary }, mode: resultMode, jobId: data.job_id }, data.job_id)
         } else {
           setIsProcessing(false)
           setStatusText(`❌ Error: ${data.error || 'No se pudo generar el resumen. Inténtalo de nuevo.'}`)
@@ -154,17 +165,22 @@ function MainAppContent() {
       const data = await res.json()
 
       if (data.success && (data.transcription || data.summary)) {
-        const result: ProcessingResult = {
-          transcription: data.transcription || '',
-          summary: data.summary || '',
-          mode: data.mode || modo,
-          jobId: data.job_id,
-        }
-        setResults(result)
+        const resultMode = data.mode || modo
+        const summary = data.summary || ''
+        setResults(prev => {
+          const prevSummaries = prev?.summaries || {}
+          return {
+            transcription: data.transcription || prev?.transcription || '',
+            summaries: { ...prevSummaries, [resultMode]: summary },
+            mode: resultMode,
+            jobId: data.job_id,
+          }
+        })
         setIsProcessing(false)
         setStatusText('')
-        setProcessedModes(prev => new Set(prev).add(result.mode))
-        saveToDb(result, data.job_id)
+        setActiveMode(resultMode)
+        setProcessedModes(prev => new Set(prev).add(resultMode))
+        saveToDb({ transcription: data.transcription || '', summaries: { [resultMode]: summary }, mode: resultMode, jobId: data.job_id }, data.job_id)
       } else {
         setIsProcessing(false)
         setStatusText(`❌ Error: ${data.error || 'No se obtuvo resultado. Inténtalo de nuevo.'}`)
@@ -194,7 +210,8 @@ function MainAppContent() {
 
   const handleLoadHistory = (item: ProcessingResult & { audioFilename: string }) => {
     setResults(item)
-    setProcessedModes(new Set([item.mode]))
+    setActiveMode(null)
+    setProcessedModes(new Set(Object.keys(item.summaries || {})))
     setHistoryTranscription(item.transcription)
     setHasAudio(false)
     setAudioBlob(null)
@@ -206,7 +223,7 @@ function MainAppContent() {
 
   return (
     <div className="app-container">
-      <Header />
+      <Header jobId={results?.jobId} />
       <main className="main-content">
         <SessionSetup />
         <FormConfig
@@ -240,13 +257,13 @@ function MainAppContent() {
         </div>
       </main>
 
-      <ResultsPanel results={results} />
+      <ResultsPanel results={results} activeMode={activeMode} />
 
       <ChatPanel
         isOpen={showChat}
         onClose={() => setShowChat(false)}
         transcription={results?.transcription ?? ''}
-        summary={results?.summary ?? ''}
+        summary={results ? (results.summaries[results.mode] ?? Object.values(results.summaries)[0] ?? '') : ''}
         jobId={results?.jobId ?? ''}
       />
 

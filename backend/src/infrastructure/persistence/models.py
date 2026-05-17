@@ -17,6 +17,8 @@ from sqlalchemy import (
     Boolean,
     Text,
     ForeignKey,
+    JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -66,6 +68,7 @@ class Transcription(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")
     transcription_text: Mapped[Optional[str]] = mapped_column(Text)
     summary_output: Mapped[Optional[str]] = mapped_column(Text)
+    summaries: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
@@ -75,6 +78,29 @@ class Transcription(Base):
     conversations: Mapped[List["Conversation"]] = relationship(
         "Conversation", back_populates="transcription", cascade="all, delete-orphan"
     )
+    modes: Mapped[List["TranscriptionMode"]] = relationship(
+        "TranscriptionMode", back_populates="transcription", cascade="all, delete-orphan",
+        order_by="TranscriptionMode.created_at",
+    )
+
+
+class TranscriptionMode(Base):
+    """Un modo de resumen generado para una transcripción."""
+
+    __tablename__ = "transcription_modes"
+    __table_args__ = (UniqueConstraint("transcription_id", "mode", name="uq_transcription_mode"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    transcription_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("transcriptions.id"), nullable=False, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="completed")
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    transcription: Mapped[Transcription] = relationship("Transcription", back_populates="modes")
 
 
 class Conversation(Base):

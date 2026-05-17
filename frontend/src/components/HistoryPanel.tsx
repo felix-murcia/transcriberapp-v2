@@ -5,12 +5,13 @@ interface HistoryItem {
   audio_filename: string
   mode: string
   status: string
+  summaries: Record<string, string>
   created_at: string | null
 }
 
 interface LoadedResult {
   transcription: string
-  summary: string
+  summaries: Record<string, string>
   mode: string
   jobId: string
   audioFilename: string
@@ -43,9 +44,14 @@ export default function HistoryPanel({ isOpen, onClose, onLoad }: HistoryPanelPr
       const res = await fetch(`/api/transcriptions/${jobId}`)
       if (!res.ok) return
       const data = await res.json()
+      const summaries: Record<string, string> = data.summaries || {}
+      // fallback: if summaries empty but summary_output exists, use mode key
+      if (Object.keys(summaries).length === 0 && data.summary_output) {
+        summaries[data.mode || 'resumen'] = data.summary_output
+      }
       onLoad({
         transcription: data.transcription_text || '',
-        summary: data.summary_output || '',
+        summaries,
         mode: data.mode,
         jobId: data.job_id,
         audioFilename: data.audio_filename || '',
@@ -121,7 +127,7 @@ export default function HistoryPanel({ isOpen, onClose, onLoad }: HistoryPanelPr
               ) : (
                 <span className="history-name">{item.audio_filename}</span>
               )}
-              <small className="history-meta">{item.mode} · {formatDate(item.created_at)}</small>
+              <small className="history-meta">{Object.keys(item.summaries || {}).join(', ') || item.mode} · {formatDate(item.created_at)}</small>
             </div>
             <div className="history-item-actions">
               <button

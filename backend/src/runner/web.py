@@ -20,9 +20,9 @@ from backend.src.infrastructure.dependency_injection import (
     create_transcription_service,
     get_background_tasks_adapter,
 )
-from backend.src.infrastructure.persistence.models import Base, User, Transcription, Conversation
+from backend.src.infrastructure.persistence.models import Base, User, Transcription, TranscriptionMode, Conversation
 from backend.src.infrastructure.persistence.repositories import (
-    UserRepository, TranscriptionRepository, ConversationRepository
+    UserRepository, TranscriptionRepository, TranscriptionModeRepository, ConversationRepository
 )
 
 # --- Database setup ---
@@ -31,6 +31,49 @@ _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite"
 engine = create_engine(DATABASE_URL, connect_args=_connect_args)
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
+
+# Migration: ensure legacy summaries column exists and populate transcription_modes from it
+import sqlalchemy as _sa
+
+with engine.connect() as _conn:
+    # Add summaries column to existing DBs that predate it (needed to read legacy data)
+    try:
+        if DATABASE_URL.startswith("sqlite"):
+            _conn.execute(_sa.text("ALTER TABLE transcriptions ADD COLUMN summaries JSON"))
+        else:
+            _conn.execute(_sa.text("ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS summaries JSON"))
+        _conn.commit()
+    except Exception:
+        pass  # Already exists
+
+    # Migrate summaries JSON → transcription_modes rows (idempotent)
+    try:
+        rows = _conn.execute(
+            _sa.text("SELECT id, summaries FROM transcriptions WHERE summaries IS NOT NULL AND summaries != '{}'")
+        ).fetchall()
+        import json as _json
+        for row in rows:
+            tr_id, summaries_raw = row
+            if not summaries_raw:
+                continue
+            summaries = summaries_raw if isinstance(summaries_raw, dict) else _json.loads(summaries_raw)
+            for mode, summary in summaries.items():
+                try:
+                    _conn.execute(
+                        _sa.text(
+                            "INSERT INTO transcription_modes (transcription_id, mode, summary, status, created_at) "
+                            "VALUES (:tid, :mode, :summary, 'completed', CURRENT_TIMESTAMP) "
+                            + ("ON CONFLICT(transcription_id, mode) DO NOTHING"
+                               if DATABASE_URL.startswith("sqlite")
+                               else "ON CONFLICT (transcription_id, mode) DO NOTHING")
+                        ),
+                        {"tid": tr_id, "mode": mode, "summary": summary},
+                    )
+                except Exception:
+                    pass
+        _conn.commit()
+    except Exception as _e:
+        print(f"[MIGRATION] summaries→transcription_modes: {_e}")
 
 
 def get_db():
@@ -185,7 +228,7 @@ async def process_text(payload: dict):
     """
     job_id = str(uuid4())
     text = (payload.get("text") or "").strip()
-    mode = payload.get("mode", "default")
+    mode = payload.get("mode", "resumen")
     filename = payload.get("filename", "text_input")
     email = payload.get("email") or None
 
@@ -309,7 +352,7 @@ async def upload_complete(
     metadata = metadata_path.read_text().strip().split("\n")
     extension = metadata[0] if len(metadata) > 0 else "webm"
     nombre = metadata[1] if len(metadata) > 1 else uploadId
-    modo = metadata[2] if len(metadata) > 2 else "default"
+    modo = metadata[2] if len(metadata) > 2 else "resumen"
     email = metadata[3] if len(metadata) > 3 and metadata[3] else None
 
     # Find and sort chunk files
@@ -322,7 +365,7 @@ async def upload_complete(
         raise HTTPException(status_code=400, detail="No se encontraron chunks")
 
     # Validate mode
-    valid_modes = ["default", "tecnico", "refinamiento", "ejecutivo", "bullet",
+    valid_modes = ["resumen", "tecnico", "refinamiento", "ejecutivo", "bullet",
                    "comparative", "product_manager", "project_manager", "quality_assurance"]
     if modo not in valid_modes:
         raise HTTPException(status_code=400, detail="Modo inválido")
@@ -494,39 +537,46 @@ def process_audio_job(job_id: str, nombre: str, modo: str, email: str = None):
 
 @app.post("/api/transcriptions")
 def save_transcription(payload: dict):
-    """Persist a completed transcription to the database."""
+    """Persist a completed transcription to the database.
+
+    All processings under the same audio_filename are grouped into one Transcription record.
+    Each mode's summary is stored as a separate TranscriptionMode row.
+    """
     db = get_db()
     try:
         user_id = get_or_create_anon_user(db)
-        repo = TranscriptionRepository(db)
+        tr_repo = TranscriptionRepository(db)
+        mode_repo = TranscriptionModeRepository(db)
 
-        job_id = payload.get("job_id", str(uuid4()))
-        existing = repo.get_by_job_id(job_id)
+        audio_filename = payload.get("audio_filename", "unknown")
+        mode = payload.get("mode", "resumen")
+        transcription_text = payload.get("transcription_text")
+        summary_output = payload.get("summary_output", "")
+        email = payload.get("email")
+
+        existing = tr_repo.get_by_filename_and_user(audio_filename, user_id)
+
         if existing:
-            repo.update_status(
-                job_id,
-                "completed",
-                transcription_text=payload.get("transcription_text"),
-                summary_output=payload.get("summary_output"),
-            )
+            existing.status = "completed"
+            if transcription_text:
+                existing.transcription_text = transcription_text
+            mode_repo.add_or_update(existing.id, mode, summary_output)
+            db.commit()
+            return {"ok": True, "job_id": existing.job_id}
         else:
-            tr = repo.create(
+            job_id = payload.get("job_id", str(uuid4()))
+            tr = tr_repo.create(
                 user_id=user_id,
                 job_id=job_id,
-                audio_filename=payload.get("audio_filename", "unknown"),
+                audio_filename=audio_filename,
                 audio_path=payload.get("audio_path"),
-                mode=payload.get("mode", "default"),
-                email=payload.get("email"),
+                mode=mode,
+                email=email,
             )
-            repo.update_status(
-                job_id,
-                "completed",
-                transcription_text=payload.get("transcription_text"),
-                summary_output=payload.get("summary_output"),
-            )
-
-        db.commit()
-        return {"ok": True, "job_id": job_id}
+            tr_repo.update_status(job_id, "completed", transcription_text=transcription_text, summary_output=summary_output)
+            mode_repo.add_or_update(tr.id, mode, summary_output)
+            db.commit()
+            return {"ok": True, "job_id": job_id}
     finally:
         db.close()
 
@@ -537,14 +587,16 @@ def list_transcriptions():
     db = get_db()
     try:
         user_id = get_or_create_anon_user(db)
-        repo = TranscriptionRepository(db)
-        items = repo.list_by_user(user_id, limit=50)
+        tr_repo = TranscriptionRepository(db)
+        mode_repo = TranscriptionModeRepository(db)
+        items = tr_repo.list_by_user(user_id, limit=50)
         return [
             {
                 "job_id": t.job_id,
                 "audio_filename": t.audio_filename,
                 "mode": t.mode,
                 "status": t.status,
+                "summaries": mode_repo.summaries_dict(t.id),
                 "created_at": t.created_at.isoformat() if t.created_at else None,
             }
             for t in items
@@ -558,8 +610,9 @@ def get_transcription(job_id: str):
     """Get a single transcription with full content."""
     db = get_db()
     try:
-        repo = TranscriptionRepository(db)
-        tr = repo.get_by_job_id(job_id)
+        tr_repo = TranscriptionRepository(db)
+        mode_repo = TranscriptionModeRepository(db)
+        tr = tr_repo.get_by_job_id(job_id)
         if not tr:
             raise HTTPException(status_code=404, detail="Not found")
         return {
@@ -569,6 +622,7 @@ def get_transcription(job_id: str):
             "status": tr.status,
             "transcription_text": tr.transcription_text,
             "summary_output": tr.summary_output,
+            "summaries": mode_repo.summaries_dict(tr.id),
             "created_at": tr.created_at.isoformat() if tr.created_at else None,
         }
     finally:

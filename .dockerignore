@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*.pyo
+venv_transcriber
+.venv
+.coverage
+htmlcov
+.pytest_cache
+
+# Node
+frontend/node_modules
+frontend/dist
+
+# Local database and runtime data
+local.db
+audios/
+outputs/
+transcripts/
+backend/src/logs/
+
+# Environment files (secrets — inject via docker run / compose)
+.env.dev
+.env.prod
+
+# Dev tooling and docs
+.copilot-tracking
+.k8s
+docs
+inventory.txt
+test_audio.mp3
+start-dev.sh
+start-prod.sh
+CLAUDE.md

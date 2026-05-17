@@ -452,7 +452,7 @@ El usuario te proporcionará una transcripción original y, opcionalmente, uno o
 - Respuestas cortas y directas cuando la pregunta lo permita."""
 
 _MODE_PROMPTS = {
-    "default": _PROMPT_DEFAULT,
+    "resumen": _PROMPT_DEFAULT,
     "tecnico": _PROMPT_TECNICO,
     "ejecutivo": _PROMPT_EJECUTIVO,
     "refinamiento": _PROMPT_REFINAMIENTO,
@@ -478,7 +478,7 @@ class GeminiAISummarizer(AISummarizerPort):
 
     def summarize(self, text: str, mode: str) -> str:
         """Summarize text using Google Gemini AI."""
-        prompt = _MODE_PROMPTS.get(mode, _MODE_PROMPTS["default"])
+        prompt = _MODE_PROMPTS.get(mode, _MODE_PROMPTS["resumen"])
 
         request_data = {
             "contents": [{
