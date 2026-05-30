@@ -10,6 +10,7 @@ services:
     networks:
       - transcriberapp-network
       - oauth2server_oauth-network
+      - ffmpeg-cuda_ffmpeg-network
     env_file:
       - .env.prod
     volumes:
@@ -74,6 +75,9 @@ networks:
     driver: bridge
   oauth2server_oauth-network:
     external: true
+  ffmpeg-cuda_ffmpeg-network:
+    external: true
+    name: ffmpeg-cuda_ffmpeg-network
 
 volumes:
   postgres_data:
