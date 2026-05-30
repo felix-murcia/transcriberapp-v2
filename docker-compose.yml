@@ -9,6 +9,7 @@ services:
       - "8002:8000"
     networks:
       - transcriberapp-network
+      - oauth2server_oauth-network
     env_file:
       - .env.prod
     volumes:
@@ -30,7 +31,7 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     ports:
-      - "3000:80"
+      - "3012:80"
     networks:
       - transcriberapp-network
     depends_on:
@@ -71,6 +72,8 @@ services:
 networks:
   transcriberapp-network:
     driver: bridge
+  oauth2server_oauth-network:
+    external: true
 
 volumes:
   postgres_data:

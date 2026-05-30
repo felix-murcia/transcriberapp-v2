@@ -48,8 +48,9 @@ body {
 
 /* Login */
 .login-page {
+  position: fixed;
+  inset: 0;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -425,6 +426,9 @@ body {
 }
 
 .app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
   border-bottom: 2px solid var(--color-gray-200);
@@ -442,6 +446,23 @@ body {
 .app-name {
   font-weight: 700;
   color: var(--color-gray-900);
+}
+
+.logout-btn {
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--color-gray-600, #6b7280);
+  border: 1px solid var(--color-gray-300, #d1d5db);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color var(--transition-fast) ease, color var(--transition-fast) ease;
+  white-space: nowrap;
+}
+
+.logout-btn:hover {
+  background-color: var(--color-gray-100, #f3f4f6);
+  color: var(--color-gray-800, #1f2937);
 }
 
 .session-status {

@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import { useAppContext } from '../context/AppContext'
 
 interface HeaderProps {
@@ -6,7 +7,13 @@ interface HeaderProps {
 
 export default function Header({ jobId }: HeaderProps) {
   const { sessionName } = useAppContext()
+  const navigate = useNavigate()
   const isActive = sessionName.length >= 5
+
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+    navigate('/login', { replace: true })
+  }
 
   return (
     <header className="app-header">
@@ -24,6 +31,9 @@ export default function Header({ jobId }: HeaderProps) {
           Job ID: <code>{jobId}</code>
         </p>
       )}
+      <button type="button" className="logout-btn" onClick={handleLogout}>
+        Cerrar sesión
+      </button>
     </header>
   )
 }

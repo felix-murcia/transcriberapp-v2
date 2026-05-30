@@ -1,6 +1,6 @@
 """Web layer - FastAPI application with REST API endpoints."""
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -10,6 +10,13 @@ import json
 import requests
 from uuid import uuid4
 from datetime import datetime
+
+from backend.src.web.auth.routes import router as auth_router
+
+
+def _require_auth(request: Request):
+    if not request.cookies.get("logged_in"):
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -49,7 +56,7 @@ with engine.connect() as _conn:
     # Migrate summaries JSON → transcription_modes rows (idempotent)
     try:
         rows = _conn.execute(
-            _sa.text("SELECT id, summaries FROM transcriptions WHERE summaries IS NOT NULL AND summaries != '{}'")
+            _sa.text("SELECT id, summaries FROM transcriptions WHERE summaries IS NOT NULL AND summaries::text != '{}'")
         ).fetchall()
         import json as _json
         for row in rows:
@@ -105,6 +112,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Auth routes (login/callback/check/logout) — no auth required on these
+app.include_router(auth_router)
+
+# Router for protected endpoints — all require logged_in cookie
+_api = APIRouter(dependencies=[Depends(_require_auth)])
+
 # Directorio temporal para chunks
 UPLOADS_TEMP_DIR = os.getenv("UPLOADS_TEMP_DIR", "/tmp/audios_chunks")
 Path(UPLOADS_TEMP_DIR).mkdir(parents=True, exist_ok=True)
@@ -116,7 +129,7 @@ async def health_check():
     return {"status": "ok", "service": "TranscriberApp API"}
 
 
-@app.post("/api/process-audio")
+@_api.post("/api/process-audio")
 async def process_audio(
     file: UploadFile = File(...),
     mode: str = Form(...),
@@ -212,7 +225,7 @@ async def process_audio(
         )
 
 
-@app.post("/api/process-text")
+@_api.post("/api/process-text")
 async def process_text(payload: dict):
     """
     Process text for summarization.
@@ -274,7 +287,7 @@ async def process_text(payload: dict):
         )
 
 
-@app.post("/api/upload-chunk")
+@_api.post("/api/upload-chunk")
 async def upload_chunk(
     chunk: UploadFile = File(...),
     chunkIndex: int = Form(...),
@@ -324,7 +337,7 @@ async def upload_chunk(
     }
 
 
-@app.post("/api/upload-complete")
+@_api.post("/api/upload-complete")
 async def upload_complete(
     background_tasks: BackgroundTasks,
     uploadId: str = Form(...),
@@ -406,7 +419,7 @@ async def upload_complete(
     }
 
 
-@app.post("/api/upload-cancel")
+@_api.post("/api/upload-cancel")
 async def upload_cancel(uploadId: str = Form(...)):
     """
     Cancel a chunked upload session.
@@ -432,7 +445,7 @@ async def upload_cancel(uploadId: str = Form(...)):
     }
 
 
-@app.get("/api/status/{job_id}")
+@_api.get("/api/status/{job_id}")
 def get_status(job_id: str):
     """Get the status of a processing job from the database."""
     db = get_db()
@@ -535,7 +548,7 @@ def process_audio_job(job_id: str, nombre: str, modo: str, email: str = None):
 # Transcription history endpoints (replaces IndexedDB)
 # =============================================================================
 
-@app.post("/api/transcriptions")
+@_api.post("/api/transcriptions")
 def save_transcription(payload: dict):
     """Persist a completed transcription to the database.
 
@@ -581,7 +594,7 @@ def save_transcription(payload: dict):
         db.close()
 
 
-@app.get("/api/transcriptions")
+@_api.get("/api/transcriptions")
 def list_transcriptions():
     """List all transcriptions for the anonymous user."""
     db = get_db()
@@ -605,7 +618,7 @@ def list_transcriptions():
         db.close()
 
 
-@app.get("/api/transcriptions/{job_id}")
+@_api.get("/api/transcriptions/{job_id}")
 def get_transcription(job_id: str):
     """Get a single transcription with full content."""
     db = get_db()
@@ -629,7 +642,7 @@ def get_transcription(job_id: str):
         db.close()
 
 
-@app.patch("/api/transcriptions/{job_id}")
+@_api.patch("/api/transcriptions/{job_id}")
 def rename_transcription(job_id: str, payload: dict):
     """Rename a transcription (audio_filename)."""
     new_name = (payload.get("audio_filename") or "").strip()
@@ -648,7 +661,7 @@ def rename_transcription(job_id: str, payload: dict):
         db.close()
 
 
-@app.delete("/api/transcriptions/{job_id}")
+@_api.delete("/api/transcriptions/{job_id}")
 def delete_transcription(job_id: str):
     """Delete a transcription."""
     db = get_db()
@@ -668,7 +681,7 @@ def delete_transcription(job_id: str):
 # Conversation endpoints
 # =============================================================================
 
-@app.post("/api/conversations")
+@_api.post("/api/conversations")
 def add_conversation_message(payload: dict):
     """Add a message to a transcription's conversation."""
     db = get_db()
@@ -690,7 +703,7 @@ def add_conversation_message(payload: dict):
         db.close()
 
 
-@app.get("/api/conversations/{job_id}")
+@_api.get("/api/conversations/{job_id}")
 def get_conversation(job_id: str):
     """Get all messages for a transcription's conversation."""
     db = get_db()
@@ -760,7 +773,7 @@ def _build_system_instruction(transcription: str, summaries: dict) -> str:
     return "\n".join(parts)
 
 
-@app.post("/api/chat/stream")
+@_api.post("/api/chat/stream")
 async def chat_stream(payload: dict):
     """Stream a chat response from Gemini given transcription context."""
     message = payload.get("message", "")
@@ -826,6 +839,8 @@ async def chat_stream(payload: dict):
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
 
+
+app.include_router(_api)
 
 if __name__ == "__main__":
     import uvicorn

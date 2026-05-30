@@ -47,3 +47,5 @@ outputs/
 transcripts/
 *.db
 CLAUDE.md
+.claude/
+.mcp.json
