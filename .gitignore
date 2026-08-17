@@ -4,10 +4,13 @@ instance/
 *.pyc
 *.pyo
 *.pyd
+*.txt
 .Python
 env/
 venv/
 ENV/
+.codegraph/
+PROJET_INFO.md
 env.bak/
 venv.bak/
 output/

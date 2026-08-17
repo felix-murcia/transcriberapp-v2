@@ -5,8 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8002:8000"
     networks:
       - transcriberapp-network
       - oauth2server_oauth-network
@@ -31,8 +29,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    ports:
-      - "3012:80"
     networks:
       - transcriberapp-network
     depends_on:
@@ -41,10 +37,9 @@ services:
 
   nginx:
     image: nginx:alpine
-    ports:
-      - "80:80"
     networks:
       - transcriberapp-network
+      - reverse-proxy-net
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
       - ./frontend/dist:/usr/share/nginx/html
@@ -78,6 +73,8 @@ networks:
   ffmpeg-cuda_ffmpeg-network:
     external: true
     name: ffmpeg-cuda_ffmpeg-network
+  reverse-proxy-net:
+    external: true
 
 volumes:
   postgres_data:
