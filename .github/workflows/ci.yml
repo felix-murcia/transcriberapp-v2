@@ -92,11 +92,25 @@ jobs:
             "RECORDINGS_DIR=/app/recordings" \
             > .env.prod
 
+      - name: Setup CI Environment and Disable Deprecation Warnings
+        run: |
+          echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+          docker network create oauth2server_oauth-network || true
+          docker network create ffmpeg-cuda_ffmpeg-network || true
+          docker network create reverse-proxy-net || true
+          echo "events {} http { server { listen 80; } }" > nginx.conf
+          cat <<EOF > docker-compose.override.yml
+          services:
+            backend:
+              ports:
+                - "8002:8000"
+          EOF
+
       - name: Build Docker images
-        run: docker compose -f docker-compose.yml build backend
+        run: docker compose -f docker-compose.yml -f docker-compose.override.yml build backend
 
       - name: Start services
-        run: docker compose -f docker-compose.yml up -d
+        run: docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 
       - name: Wait for backend to be ready
         run: |
@@ -109,7 +123,7 @@ jobs:
             sleep 3
           done
           echo "Backend did not start in time"
-          docker compose -f docker-compose.yml logs backend
+          docker compose -f docker-compose.yml -f docker-compose.override.yml logs backend
           exit 1
 
       - name: Smoke test — health endpoint
@@ -118,16 +132,16 @@ jobs:
           echo "Response: $response"
           echo "$response" | grep -q '"ok"'
 
-      - name: Smoke test — transcriptions list endpoint
+      - name: Smoke test — authentication check endpoint
         run: |
-          response=$(curl -sf http://localhost:8002/api/transcriptions)
+          response=$(curl -sf http://localhost:8002/api/auth/check)
           echo "Response: $response"
-          echo "$response" | grep -qE '^\[.*\]$'
+          echo "$response" | grep -qE '"logged_in"'
 
       - name: Print logs on failure
         if: failure()
-        run: docker compose -f docker-compose.yml logs
+        run: docker compose -f docker-compose.yml -f docker-compose.override.yml logs
 
       - name: Stop services
         if: always()
-        run: docker compose -f docker-compose.yml down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.override.yml down -v

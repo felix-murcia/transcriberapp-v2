@@ -54,7 +54,7 @@ class TestGeminiAISummarizer:
     def test_summarize_api_error_raises(self, mock_post):
         mock_post.return_value = MagicMock(status_code=500, text="Server error")
         summarizer = GeminiAISummarizer(api_key="test-key")
-        with pytest.raises(Exception, match="Gemini API error"):
+        with pytest.raises(Exception, match="Ha ocurrido un error interno al generar el resumen"):
             summarizer.summarize("text", "resumen")
 
     def test_get_agent_returns_none(self):

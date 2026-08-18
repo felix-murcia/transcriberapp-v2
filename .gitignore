@@ -13,7 +13,7 @@ ENV/
 PROJET_INFO.md
 env.bak/
 venv.bak/
-output/
+/output/
 htmlcov/
 .coverage
 .coverage.*

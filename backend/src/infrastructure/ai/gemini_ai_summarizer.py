@@ -503,7 +503,8 @@ class GeminiAISummarizer(AISummarizerPort):
         )
 
         if response.status_code != 200:
-            raise Exception(f"Gemini API error: {response.status_code} - {response.text}")
+            print(f"[Gemini API Error] {response.status_code} - {response.text}")
+            raise Exception("Ha ocurrido un error interno al generar el resumen. Por favor, verifica la configuración de claves API de IA o vuelve a intentarlo más tarde.")
 
         result = response.json()
         summary = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")

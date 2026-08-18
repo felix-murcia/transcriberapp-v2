@@ -25,16 +25,6 @@ services:
       - redis
     restart: unless-stopped
 
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    networks:
-      - transcriberapp-network
-    depends_on:
-      - backend
-    restart: unless-stopped
-
   nginx:
     image: nginx:alpine
     networks:

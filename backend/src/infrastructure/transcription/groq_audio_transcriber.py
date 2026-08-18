@@ -91,7 +91,8 @@ class GroqAudioTranscriber(AudioTranscriberPort):
                     time.sleep(wait)
                     continue
             if resp.status_code != 200:
-                raise Exception(f"Groq API error {resp.status_code}: {resp.text[:300]}")
+                print(f"[Groq API Error] HTTP {resp.status_code}: {resp.text[:300]}")
+                raise Exception("Error interno al transcribir el audio. Por favor, verifica la configuración de Groq o intenta más tarde.")
             text = resp.json().get("text", "").strip()
             print(f"[GROQ] got {len(text)} chars")
             return text

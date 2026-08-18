@@ -78,12 +78,17 @@ export default function AudioRecorder({ disabled = false, onAudioAvailable, onJo
     setStatusText(`Subiendo (0/${totalChunks} partes)…`)
 
     try {
-      for (let i = 0; i < totalChunks; i++) {
+      const MAX_CONCURRENCY = 3
+      const MAX_RETRIES = 3
+      let completedChunks = 0
+
+      // Helper function to upload a single chunk with retries
+      const uploadSingleChunk = async (i: number, retries = 0): Promise<void> => {
         const start = i * CHUNK_SIZE
-        const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
+        const chunkBlob = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
 
         const fd = new FormData()
-        fd.append('chunk', new File([chunk], `chunk_${i}`, { type: file.type }))
+        fd.append('chunk', new File([chunkBlob], `chunk_${i}`, { type: file.type }))
         fd.append('chunkIndex', String(i))
         fd.append('totalChunks', String(totalChunks))
         fd.append('uploadId', sessionId)
@@ -91,13 +96,37 @@ export default function AudioRecorder({ disabled = false, onAudioAvailable, onJo
         fd.append('modo', 'resumen')
         fd.append('extension', ext)
 
-        const res = await fetch('/api/upload-chunk', { method: 'POST', body: fd })
-        if (!res.ok) throw new Error(`Error en chunk ${i + 1}`)
+        try {
+          const res = await fetch('/api/upload-chunk', { method: 'POST', body: fd })
+          if (!res.ok) throw new Error(`Status ${res.status}`)
 
-        const progress = Math.round(((i + 1) / totalChunks) * 100)
-        setUploadProgress(progress)
-        setStatusText(`Subiendo (${i + 1}/${totalChunks} partes)…`)
+          // Increment completed and update UI
+          completedChunks++
+          const progress = Math.round((completedChunks / totalChunks) * 100)
+          setUploadProgress(progress)
+          setStatusText(`Subiendo (${completedChunks}/${totalChunks} partes)…`)
+        } catch (err: any) {
+          if (retries < MAX_RETRIES) {
+            console.warn(`Retry ${retries + 1} for chunk ${i} due to: ${err.message}`)
+            // Exponential backoff buffer
+            await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, retries)))
+            return uploadSingleChunk(i, retries + 1)
+          }
+          throw new Error(`Error en chunk ${i + 1} tras ${MAX_RETRIES} intentos`)
+        }
       }
+
+      // Concurrency Queue
+      let currentChunkIndex = 0
+      const workers = Array(MAX_CONCURRENCY).fill(null).map(async () => {
+        while (currentChunkIndex < totalChunks) {
+          const idx = currentChunkIndex++
+          await uploadSingleChunk(idx)
+        }
+      })
+
+      // Wait for all chunks to finish uploading
+      await Promise.all(workers)
 
       setStatusText('Finalizando subida…')
       const completeForm = new FormData()
@@ -117,7 +146,7 @@ export default function AudioRecorder({ disabled = false, onAudioAvailable, onJo
       if (uploadIdRef.current) {
         const cfd = new FormData()
         cfd.append('uploadId', uploadIdRef.current)
-        fetch('/api/upload-cancel', { method: 'POST', body: cfd }).catch(() => {})
+        fetch('/api/upload-cancel', { method: 'POST', body: cfd }).catch(() => { })
       }
     } finally {
       setIsUploading(false)
@@ -158,7 +187,7 @@ export default function AudioRecorder({ disabled = false, onAudioAvailable, onJo
     if (uploadIdRef.current) {
       const fd = new FormData()
       fd.append('uploadId', uploadIdRef.current)
-      await fetch('/api/upload-cancel', { method: 'POST', body: fd }).catch(() => {})
+      await fetch('/api/upload-cancel', { method: 'POST', body: fd }).catch(() => { })
       uploadIdRef.current = ''
     }
     setIsUploading(false)

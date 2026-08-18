@@ -891,6 +891,7 @@ body {
 }
 
 .history-name {
+  display: block;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;

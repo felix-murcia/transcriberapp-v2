@@ -120,6 +120,7 @@ function MainAppContent() {
             mode: modo,
             filename: sessionName,
             email: email || null,
+            job_id: results?.jobId,
           }),
         })
         const data = await res.json()
@@ -250,8 +251,8 @@ function MainAppContent() {
               modoAlreadyProcessed
                 ? 'Este modo ya fue procesado para este audio'
                 : canProcess
-                ? 'Enviar y procesar'
-                : 'Requiere sesión activa y audio o transcripción cargada'
+                  ? 'Enviar y procesar'
+                  : 'Requiere sesión activa y audio o transcripción cargada'
             }
           >
             {isProcessing ? '⏳ Procesando…' : '🚀 Enviar y Procesar'}

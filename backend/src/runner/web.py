@@ -239,7 +239,7 @@ async def process_text(payload: dict):
     Returns:
         JSON with job_id, transcription, and summary
     """
-    job_id = str(uuid4())
+    job_id = payload.get("job_id") or str(uuid4())
     text = (payload.get("text") or "").strip()
     mode = payload.get("mode", "resumen")
     filename = payload.get("filename", "text_input")
@@ -567,10 +567,12 @@ def save_transcription(payload: dict):
         summary_output = payload.get("summary_output", "")
         email = payload.get("email")
 
-        existing = tr_repo.get_by_filename_and_user(audio_filename, user_id)
+        existing_by_job = tr_repo.get_by_job_id(payload.get("job_id")) if payload.get("job_id") else None
+        existing = existing_by_job or tr_repo.get_by_filename_and_user(audio_filename, user_id)
 
         if existing:
             existing.status = "completed"
+            existing.audio_filename = audio_filename
             if transcription_text:
                 existing.transcription_text = transcription_text
             mode_repo.add_or_update(existing.id, mode, summary_output)
@@ -603,17 +605,20 @@ def list_transcriptions():
         tr_repo = TranscriptionRepository(db)
         mode_repo = TranscriptionModeRepository(db)
         items = tr_repo.list_by_user(user_id, limit=50)
-        return [
-            {
+        res = []
+        for t in items:
+            s_dict = mode_repo.summaries_dict(t.id)
+            if t.mode and getattr(t, "summary_output", None) and t.mode not in s_dict:
+                s_dict[t.mode] = t.summary_output
+            res.append({
                 "job_id": t.job_id,
                 "audio_filename": t.audio_filename,
                 "mode": t.mode,
                 "status": t.status,
-                "summaries": mode_repo.summaries_dict(t.id),
+                "summaries": s_dict,
                 "created_at": t.created_at.isoformat() if t.created_at else None,
-            }
-            for t in items
-        ]
+            })
+        return res
     finally:
         db.close()
 
@@ -628,6 +633,10 @@ def get_transcription(job_id: str):
         tr = tr_repo.get_by_job_id(job_id)
         if not tr:
             raise HTTPException(status_code=404, detail="Not found")
+        s_dict = mode_repo.summaries_dict(tr.id)
+        if tr.mode and getattr(tr, "summary_output", None) and tr.mode not in s_dict:
+            s_dict[tr.mode] = tr.summary_output
+
         return {
             "job_id": tr.job_id,
             "audio_filename": tr.audio_filename,
@@ -635,7 +644,7 @@ def get_transcription(job_id: str):
             "status": tr.status,
             "transcription_text": tr.transcription_text,
             "summary_output": tr.summary_output,
-            "summaries": mode_repo.summaries_dict(tr.id),
+            "summaries": s_dict,
             "created_at": tr.created_at.isoformat() if tr.created_at else None,
         }
     finally:
